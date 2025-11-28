@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: alerts-service
+
+server:
+  port: 8082
