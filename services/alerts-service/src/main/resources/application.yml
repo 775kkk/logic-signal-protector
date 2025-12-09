@@ -2,5 +2,18 @@ spring:
   application:
     name: alerts-service
 
+  datasource:
+    url: jdbc:postgresql://localhost:5432/testpings
+    username: pingtestAss
+    password: 1111
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update       # Hibernate сам создаст/обновит таблицу pings
+    show-sql: true           # выводить SQL в лог
+    properties:
+      hibernate.format_sql: true
+
 server:
   port: 8082
