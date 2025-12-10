@@ -1,6 +1,18 @@
 spring:
   application:
     name: api-gateway-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/lsp_gateway
+    username: lsp_gateway_app
+    password: 1111
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate   # leave schema as-is, Hibernate only validates
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
 
 server:
   port: 8080
