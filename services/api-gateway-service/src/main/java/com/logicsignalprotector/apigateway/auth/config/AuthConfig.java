@@ -8,9 +8,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @Configuration
 public class AuthConfig {
 
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        // BCrypt — стандартный вариант для паролей
-        return new BCryptPasswordEncoder();
-    }
+  @Bean
+  public PasswordEncoder passwordEncoder() {
+    // BCrypt — стандартный вариант для паролей
+    return new BCryptPasswordEncoder();
+  }
 }

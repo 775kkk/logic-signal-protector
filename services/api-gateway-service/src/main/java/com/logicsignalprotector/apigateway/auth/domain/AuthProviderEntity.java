@@ -7,44 +7,44 @@ import java.util.Objects;
 @Table(name = "auth_provider")
 public class AuthProviderEntity {
 
-    @Id
-    @Column(name = "code", length = 32)
-    private String code;
+  @Id
+  @Column(name = "code", length = 32)
+  private String code;
 
-    @Column(name = "name", nullable = false, length = 64)
-    private String name;
+  @Column(name = "name", nullable = false, length = 64)
+  private String name;
 
-    protected AuthProviderEntity() {
-        // for JPA
+  protected AuthProviderEntity() {
+    // for JPA
+  }
+
+  public AuthProviderEntity(String code, String name) {
+    this.code = code;
+    this.name = name;
+  }
+
+  public String getCode() {
+    return code;
+  }
+
+  public String getName() {
+    return name;
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
     }
-
-    public AuthProviderEntity(String code, String name) {
-        this.code = code;
-        this.name = name;
+    if (o == null || getClass() != o.getClass()) {
+      return false;
     }
+    AuthProviderEntity that = (AuthProviderEntity) o;
+    return Objects.equals(code, that.code);
+  }
 
-    public String getCode() {
-        return code;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        AuthProviderEntity that = (AuthProviderEntity) o;
-        return Objects.equals(code, that.code);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(code);
-    }
+  @Override
+  public int hashCode() {
+    return Objects.hash(code);
+  }
 }

@@ -9,23 +9,22 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class UserService {
 
-    private final UserRepository userRepository;
-    private final PasswordEncoder passwordEncoder;
+  private final UserRepository userRepository;
+  private final PasswordEncoder passwordEncoder;
 
-    public UserService(UserRepository userRepository,
-                        PasswordEncoder passwordEncoder) {
-        this.userRepository = userRepository;
-        this.passwordEncoder = passwordEncoder;
+  public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    this.userRepository = userRepository;
+    this.passwordEncoder = passwordEncoder;
+  }
+
+  @Transactional
+  public UserEntity register(String login, String rawPassword) {
+    if (userRepository.existsByLogin(login)) {
+      throw new IllegalArgumentException("Пользователь с таким логином уже существует");
     }
 
-    @Transactional
-    public UserEntity register(String login, String rawPassword) {
-        if (userRepository.existsByLogin(login)) {
-            throw new IllegalArgumentException("Пользователь с таким логином уже существует");
-        }
-
-        String hash = passwordEncoder.encode(rawPassword);
-        UserEntity user = new UserEntity(login, hash);
-        return userRepository.save(user);
-    }
+    String hash = passwordEncoder.encode(rawPassword);
+    UserEntity user = new UserEntity(login, hash);
+    return userRepository.save(user);
+  }
 }

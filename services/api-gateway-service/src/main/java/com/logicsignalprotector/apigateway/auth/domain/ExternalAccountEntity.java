@@ -8,89 +8,89 @@ import org.hibernate.Hibernate;
 @Table(name = "external_accounts")
 public class ExternalAccountEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+  @Id
+  @GeneratedValue(strategy = GenerationType.IDENTITY)
+  private Long id;
 
-    // связь с нашим пользователем
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "user_id", nullable = false)
-    private UserEntity user;
+  // связь с нашим пользователем
+  @ManyToOne(fetch = FetchType.LAZY, optional = false)
+  @JoinColumn(name = "user_id", nullable = false)
+  private UserEntity user;
 
-    // код провайдера ('TELEGRAM', 'WEB', ...)
-    @Column(name = "provider_code", nullable = false, length = 32)
-    private String providerCode;
+  // код провайдера ('TELEGRAM', 'WEB', ...)
+  @Column(name = "provider_code", nullable = false, length = 32)
+  private String providerCode;
 
-    // внешний id (chatId, userId и т.п.)
-    @Column(name = "external_id", nullable = false, length = 128)
-    private String externalId;
+  // внешний id (chatId, userId и т.п.)
+  @Column(name = "external_id", nullable = false, length = 128)
+  private String externalId;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private Instant createdAt;
+  @Column(name = "created_at", nullable = false, updatable = false)
+  private Instant createdAt;
 
-    protected ExternalAccountEntity() {
-        // for JPA
+  protected ExternalAccountEntity() {
+    // for JPA
+  }
+
+  public ExternalAccountEntity(UserEntity user, String providerCode, String externalId) {
+    this.user = user;
+    this.providerCode = providerCode;
+    this.externalId = externalId;
+  }
+
+  @PrePersist
+  public void prePersist() {
+    if (createdAt == null) {
+      createdAt = Instant.now();
     }
+  }
 
-    public ExternalAccountEntity(UserEntity user, String providerCode, String externalId) {
-        this.user = user;
-        this.providerCode = providerCode;
-        this.externalId = externalId;
-    }
+  public Long getId() {
+    return id;
+  }
 
-    @PrePersist
-    public void prePersist() {
-        if (createdAt == null) {
-            createdAt = Instant.now();
-        }
-    }
+  public UserEntity getUser() {
+    return user;
+  }
 
-    public Long getId() {
-        return id;
-    }
+  public void setUser(UserEntity user) {
+    this.user = user;
+  }
 
-    public UserEntity getUser() {
-        return user;
-    }
+  public String getProviderCode() {
+    return providerCode;
+  }
 
-    public void setUser(UserEntity user) {
-        this.user = user;
-    }
+  public void setProviderCode(String providerCode) {
+    this.providerCode = providerCode;
+  }
 
-    public String getProviderCode() {
-        return providerCode;
-    }
+  public String getExternalId() {
+    return externalId;
+  }
 
-    public void setProviderCode(String providerCode) {
-        this.providerCode = providerCode;
-    }
+  public void setExternalId(String externalId) {
+    this.externalId = externalId;
+  }
 
-    public String getExternalId() {
-        return externalId;
-    }
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
 
-    public void setExternalId(String externalId) {
-        this.externalId = externalId;
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
     }
+    if (o == null || Hibernate.getClass(this) != Hibernate.getClass(o)) {
+      return false;
+    }
+    ExternalAccountEntity that = (ExternalAccountEntity) o;
+    return id != null && id.equals(that.id);
+  }
 
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || Hibernate.getClass(this) != Hibernate.getClass(o)) {
-            return false;
-        }
-        ExternalAccountEntity that = (ExternalAccountEntity) o;
-        return id != null && id.equals(that.id);
-    }
-
-    @Override
-    public int hashCode() {
-        return getClass().hashCode();
-    }
+  @Override
+  public int hashCode() {
+    return getClass().hashCode();
+  }
 }
