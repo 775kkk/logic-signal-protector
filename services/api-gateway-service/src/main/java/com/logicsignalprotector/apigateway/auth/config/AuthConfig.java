@@ -10,7 +10,6 @@ public class AuthConfig {
 
   @Bean
   public PasswordEncoder passwordEncoder() {
-    // BCrypt — стандартный вариант для паролей
     return new BCryptPasswordEncoder();
   }
 }

@@ -2,6 +2,8 @@ package com.logicsignalprotector.apigateway.auth.domain;
 
 import jakarta.persistence.*;
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.Set;
 import org.hibernate.Hibernate;
 
 @Entity
@@ -18,30 +20,25 @@ public class UserEntity {
   @Column(name = "password_hash", nullable = false, length = 255)
   private String passwordHash;
 
-  @Column(name = "created_at", nullable = false, updatable = false)
-  private Instant createdAt;
+  @Column(name = "created_at", nullable = false)
+  private Instant createdAt = Instant.now();
 
   @Column(name = "is_active", nullable = false)
   private boolean active = true;
 
-  protected UserEntity() {
-    // for JPA
-  }
+  @ManyToMany(fetch = FetchType.EAGER)
+  @JoinTable(
+      name = "user_roles",
+      joinColumns = @JoinColumn(name = "user_id"),
+      inverseJoinColumns = @JoinColumn(name = "role_id"))
+  private Set<RoleEntity> roles = new HashSet<>();
+
+  protected UserEntity() {}
 
   public UserEntity(String login, String passwordHash) {
     this.login = login;
     this.passwordHash = passwordHash;
-    this.active = true;
   }
-
-  @PrePersist
-  public void prePersist() {
-    if (createdAt == null) {
-      createdAt = Instant.now();
-    }
-  }
-
-  // getters / setters
 
   public Long getId() {
     return id;
@@ -51,16 +48,8 @@ public class UserEntity {
     return login;
   }
 
-  public void setLogin(String login) {
-    this.login = login;
-  }
-
   public String getPasswordHash() {
     return passwordHash;
-  }
-
-  public void setPasswordHash(String passwordHash) {
-    this.passwordHash = passwordHash;
   }
 
   public Instant getCreatedAt() {
@@ -75,16 +64,16 @@ public class UserEntity {
     this.active = active;
   }
 
+  public Set<RoleEntity> getRoles() {
+    return roles;
+  }
+
   @Override
   public boolean equals(Object o) {
-    if (this == o) {
-      return true;
-    }
-    if (o == null || Hibernate.getClass(this) != Hibernate.getClass(o)) {
-      return false;
-    }
-    UserEntity that = (UserEntity) o;
-    return id != null && id.equals(that.id);
+    if (this == o) return true;
+    if (o == null || Hibernate.getClass(this) != Hibernate.getClass(o)) return false;
+    UserEntity user = (UserEntity) o;
+    return id != null && id.equals(user.id);
   }
 
   @Override

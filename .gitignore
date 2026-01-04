@@ -37,3 +37,8 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+# Local helper scripts
+start.cmd
+*.log
+*.err

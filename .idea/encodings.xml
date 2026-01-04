@@ -4,6 +4,7 @@
     <file url="file://$PROJECT_DIR$/services/alerts-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/services/api-gateway-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/services/market-data-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/services/virtual-broker-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/resources" charset="UTF-8" />
   </component>
