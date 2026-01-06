@@ -53,6 +53,8 @@
 
     <modules>
         <module>services/api-gateway-service</module>
+        <module>services/api-telegram-service</module>
+        <module>services/logic-commands-center-service</module>
         <module>services/market-data-service</module>
         <module>services/alerts-service</module>
         <module>services/virtual-broker-service</module>

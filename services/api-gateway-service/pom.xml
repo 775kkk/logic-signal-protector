@@ -45,6 +45,12 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
+        <!-- JDBC (used for lightweight RBAC queries in step 1.3) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+
         <!-- Flyway migrations -->
         <dependency>
             <groupId>org.flywaydb</groupId>

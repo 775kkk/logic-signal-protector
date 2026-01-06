@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 public class TokenService {
 
   private final JwtEncoder jwtEncoder;
+  private final PermissionService permissionService;
 
   @Value("${security.jwt.issuer:lsp-api-gateway}")
   private String issuer;
@@ -26,15 +27,24 @@ public class TokenService {
     Instant now = Instant.now();
     Duration ttl = accessTtl;
 
+    // Step 1.3: compute effective permissions from DB (role-permissions + user overrides)
+    var roleCodes = user.getRoles().stream().map(r -> r.getCode()).collect(Collectors.toList());
+    var permCodes =
+        permissionService
+            .getEffectivePermissionCodes(user.getId() == null ? -1L : user.getId())
+            .stream()
+            .sorted()
+            .collect(Collectors.toList());
+
     JwtClaimsSet claims =
         JwtClaimsSet.builder()
             .issuer(issuer)
             .issuedAt(now)
             .expiresAt(now.plus(ttl))
             .subject(user.getLogin())
-            .claim(
-                "roles",
-                user.getRoles().stream().map(r -> r.getCode()).collect(Collectors.toList()))
+            .claim("uid", user.getId())
+            .claim("roles", roleCodes)
+            .claim("perms", permCodes)
             .build();
 
     JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();

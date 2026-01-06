@@ -10,5 +10,9 @@ public interface ExternalAccountRepository extends JpaRepository<ExternalAccount
   Optional<ExternalAccountEntity> findByProviderCodeAndExternalId(
       String providerCode, String externalId);
 
-  List<ExternalAccountEntity> findByUserId(Long userId);
+  List<ExternalAccountEntity> findByUser_Id(Long userId);
+
+  boolean existsByUser_IdAndProviderCode(Long userId, String providerCode);
+
+  Optional<ExternalAccountEntity> findByUser_IdAndProviderCode(Long userId, String providerCode);
 }

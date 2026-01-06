@@ -11,6 +11,6 @@ public class PingController {
   public Map<String, String> ping() {
     return Map.of(
         "service", "api-gateway-service",
-        "status", "ok");
+        "status", "api-gateway-service");
   }
 }

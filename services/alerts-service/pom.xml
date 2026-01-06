@@ -39,6 +39,16 @@
             <version>${springdoc.version}</version>
         </dependency>
 
+        <!-- Step 1.3: validate access token issued by gateway -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
         <!-- Lombok (compile-time only) -->
         <dependency>
             <groupId>org.projectlombok</groupId>

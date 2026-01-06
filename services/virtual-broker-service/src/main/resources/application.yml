@@ -20,3 +20,8 @@ management:
 
 server:
   port: 8083
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-change-me-dev-only-change-me}
+    issuer: ${JWT_ISSUER:lsp-api-gateway}

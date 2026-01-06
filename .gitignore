@@ -40,5 +40,8 @@ build/
 
 # Local helper scripts
 start.cmd
+start-all.cmd
 *.log
 *.err
+t.md
+.env

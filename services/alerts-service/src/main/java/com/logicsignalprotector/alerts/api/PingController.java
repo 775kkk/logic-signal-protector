@@ -9,8 +9,6 @@ public class PingController {
 
   @GetMapping("/ping")
   public Map<String, String> ping() {
-    return Map.of(
-        "service", "alerts-service",
-        "status", "ok");
+    return Map.of("service", "alerts-service", "status", "alerts-service");
   }
 }
