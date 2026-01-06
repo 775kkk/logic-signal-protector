@@ -24,6 +24,11 @@ public final class InternalDtos {
   public record IssueAccessRequest(
       @NotBlank String providerCode, @NotBlank String externalUserId) {}
 
+  // Step 1.4: unlink external account (logout semantics for Telegram).
+  public record UnlinkRequest(@NotBlank String providerCode, @NotBlank String externalUserId) {}
+
+  public record OkResponse(boolean ok) {}
+
   public record TokensResponse(
       String accessToken,
       String tokenType,

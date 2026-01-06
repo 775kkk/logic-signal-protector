@@ -36,11 +36,21 @@ public class ChatStateStore {
   }
 
   public void set(String key, ChatState state) {
+    set(key, state, null);
+  }
+
+  /**
+   * Set state with optional TTL override.
+   *
+   * <p>Used in step 1.4 for short-lived confirmations (logout yes...)
+   */
+  public void set(String key, ChatState state, Duration ttlOverride) {
     if (state == null || state == ChatState.NONE) {
       map.remove(key);
       return;
     }
-    map.put(key, new Entry(state, Instant.now().plus(ttl)));
+    Duration actual = ttlOverride == null ? ttl : ttlOverride;
+    map.put(key, new Entry(state, Instant.now().plus(actual)));
   }
 
   public void clear(String key) {

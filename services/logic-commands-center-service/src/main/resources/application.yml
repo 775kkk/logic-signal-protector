@@ -37,3 +37,10 @@ services:
 chat:
   state:
     ttl: ${CHAT_STATE_TTL:PT10M}
+
+# Step 1.4: in-memory rate-limit for /adminlogin (dev backdoor code).
+dev:
+  adminlogin:
+    rate:
+      window: ${DEV_ADMINLOGIN_RATE_WINDOW:PT10M}
+      max-attempts: ${DEV_ADMINLOGIN_RATE_MAX_ATTEMPTS:5}

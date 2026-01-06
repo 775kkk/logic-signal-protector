@@ -1,6 +1,7 @@
 package com.logicsignalprotector.apigateway.internal.api;
 
 import com.logicsignalprotector.apigateway.auth.repository.ExternalAccountRepository;
+import com.logicsignalprotector.apigateway.auth.service.AuthAuditService;
 import com.logicsignalprotector.apigateway.auth.service.PermissionService;
 import com.logicsignalprotector.apigateway.internal.api.dto.InternalDtos;
 import jakarta.validation.Valid;
@@ -18,11 +19,15 @@ public class InternalIdentityController {
 
   private final ExternalAccountRepository externalAccounts;
   private final PermissionService permissionService;
+  private final AuthAuditService audit;
 
   public InternalIdentityController(
-      ExternalAccountRepository externalAccounts, PermissionService permissionService) {
+      ExternalAccountRepository externalAccounts,
+      PermissionService permissionService,
+      AuthAuditService audit) {
     this.externalAccounts = externalAccounts;
     this.permissionService = permissionService;
+    this.audit = audit;
   }
 
   /** Step 1.3: resolve our internal user by (providerCode, externalUserId). */
@@ -45,5 +50,20 @@ public class InternalIdentityController {
             .collect(Collectors.toList());
 
     return new InternalDtos.ResolveResponse(true, userId, user.getLogin(), roles, perms);
+  }
+
+  /** Step 1.4: unlink external account by (providerCode, externalUserId). Idempotent. */
+  @PostMapping("/unlink")
+  @Transactional
+  public InternalDtos.OkResponse unlink(@Valid @RequestBody InternalDtos.UnlinkRequest req) {
+    var opt =
+        externalAccounts.findByProviderCodeAndExternalId(req.providerCode(), req.externalUserId());
+    if (opt.isPresent()) {
+      var ext = opt.get();
+      var user = ext.getUser();
+      externalAccounts.delete(ext);
+      audit.log(user, "TELEGRAM_UNLINK", "internal", "internal", null);
+    }
+    return new InternalDtos.OkResponse(true);
   }
 }

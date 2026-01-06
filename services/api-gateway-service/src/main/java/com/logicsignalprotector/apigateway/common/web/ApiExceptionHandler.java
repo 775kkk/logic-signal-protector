@@ -43,6 +43,18 @@ public class ApiExceptionHandler {
         .body(ErrorResponse.of("CONFLICT", e.getMessage()));
   }
 
+  @ExceptionHandler(ForbiddenException.class)
+  public ResponseEntity<ErrorResponse> handle403(ForbiddenException e) {
+    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+        .body(ErrorResponse.of("FORBIDDEN", e.getMessage()));
+  }
+
+  @ExceptionHandler(NotFoundException.class)
+  public ResponseEntity<ErrorResponse> handle404(NotFoundException e) {
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .body(ErrorResponse.of("NOT_FOUND", e.getMessage()));
+  }
+
   @ExceptionHandler(Exception.class)
   public ResponseEntity<ErrorResponse> handle500(Exception e) {
     log.error("Unhandled exception", e);

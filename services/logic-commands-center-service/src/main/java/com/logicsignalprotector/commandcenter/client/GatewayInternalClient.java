@@ -68,6 +68,114 @@ public class GatewayInternalClient {
     return res;
   }
 
+  // Step 1.4: unlink external account (logout semantics for Telegram).
+  public OkResponse unlink(String providerCode, String externalUserId) {
+    OkResponse res =
+        rest.post()
+            .uri("/internal/identity/unlink")
+            .header("X-Internal-Token", internalToken)
+            .body(new UnlinkRequest(providerCode, externalUserId))
+            .retrieve()
+            .body(OkResponse.class);
+    return res == null ? new OkResponse(true) : res;
+  }
+
+  // Step 1.4: dev-only backdoor (shared code) to grant ADMIN role.
+  public ElevateByCodeResponse elevateByCode(
+      String providerCode, String externalUserId, String code) {
+    ElevateByCodeResponse res =
+        rest.post()
+            .uri("/internal/rbac/elevate-by-code")
+            .header("X-Internal-Token", internalToken)
+            .body(new ElevateByCodeRequest(providerCode, externalUserId, code))
+            .retrieve()
+            .body(ElevateByCodeResponse.class);
+    return res;
+  }
+
+  public UserInfoResponse getUser(long actorUserId, String login) {
+    return rest.post()
+        .uri("/internal/rbac/users/get")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorLoginRequest(actorUserId, login))
+        .retrieve()
+        .body(UserInfoResponse.class);
+  }
+
+  public UsersListResponse listUsers(long actorUserId) {
+    return rest.post()
+        .uri("/internal/rbac/users/list")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorRequest(actorUserId))
+        .retrieve()
+        .body(UsersListResponse.class);
+  }
+
+  public RolesResponse listRoles(long actorUserId) {
+    return rest.post()
+        .uri("/internal/rbac/roles/list")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorRequest(actorUserId))
+        .retrieve()
+        .body(RolesResponse.class);
+  }
+
+  public PermsResponse listPerms(long actorUserId) {
+    return rest.post()
+        .uri("/internal/rbac/perms/list")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorRequest(actorUserId))
+        .retrieve()
+        .body(PermsResponse.class);
+  }
+
+  public UserInfoResponse grantRole(long actorUserId, String targetLogin, String roleCode) {
+    return rest.post()
+        .uri("/internal/rbac/roles/grant")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorTargetRoleRequest(actorUserId, targetLogin, roleCode))
+        .retrieve()
+        .body(UserInfoResponse.class);
+  }
+
+  public UserInfoResponse revokeRole(long actorUserId, String targetLogin, String roleCode) {
+    return rest.post()
+        .uri("/internal/rbac/roles/revoke")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorTargetRoleRequest(actorUserId, targetLogin, roleCode))
+        .retrieve()
+        .body(UserInfoResponse.class);
+  }
+
+  public UserInfoResponse grantPerm(
+      long actorUserId, String targetLogin, String permCode, String reason) {
+    return rest.post()
+        .uri("/internal/rbac/perms/grant")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorTargetPermRequest(actorUserId, targetLogin, permCode, reason, null))
+        .retrieve()
+        .body(UserInfoResponse.class);
+  }
+
+  public UserInfoResponse denyPerm(
+      long actorUserId, String targetLogin, String permCode, String reason) {
+    return rest.post()
+        .uri("/internal/rbac/perms/deny")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorTargetPermRequest(actorUserId, targetLogin, permCode, reason, null))
+        .retrieve()
+        .body(UserInfoResponse.class);
+  }
+
+  public UserInfoResponse revokePerm(long actorUserId, String targetLogin, String permCode) {
+    return rest.post()
+        .uri("/internal/rbac/perms/revoke")
+        .header("X-Internal-Token", internalToken)
+        .body(new ActorTargetPermRequest(actorUserId, targetLogin, permCode, null, null))
+        .retrieve()
+        .body(UserInfoResponse.class);
+  }
+
   public record ResolveRequest(String providerCode, String externalUserId) {}
 
   public record ResolveResponse(
@@ -84,4 +192,48 @@ public class GatewayInternalClient {
       String login,
       List<String> roles,
       List<String> perms) {}
+
+  public record UnlinkRequest(String providerCode, String externalUserId) {}
+
+  public record OkResponse(boolean ok) {}
+
+  public record ElevateByCodeRequest(String providerCode, String externalUserId, String code) {}
+
+  public record ElevateByCodeResponse(
+      boolean ok, String login, List<String> roles, List<String> perms) {}
+
+  public record ActorRequest(long actorUserId) {}
+
+  public record ActorLoginRequest(long actorUserId, String login) {}
+
+  public record ActorTargetRoleRequest(long actorUserId, String targetLogin, String roleCode) {}
+
+  public record ActorTargetPermRequest(
+      long actorUserId,
+      String targetLogin,
+      String permCode,
+      String reason,
+      java.time.Instant expiresAt) {}
+
+  public record OverrideDto(
+      String permCode, boolean allowed, java.time.Instant expiresAt, String reason) {}
+
+  public record UserInfoResponse(
+      Long userId,
+      String login,
+      List<String> roles,
+      List<String> perms,
+      List<OverrideDto> overrides) {}
+
+  public record ShortUserDto(Long userId, String login) {}
+
+  public record UsersListResponse(List<ShortUserDto> users) {}
+
+  public record RoleDto(String code, String name) {}
+
+  public record RolesResponse(List<RoleDto> roles) {}
+
+  public record PermDto(String code, String name) {}
+
+  public record PermsResponse(List<PermDto> perms) {}
 }
