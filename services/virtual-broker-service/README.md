@@ -1,23 +1,56 @@
-# virtual-broker-service
+﻿# virtual-broker-service
 
-## Назначение
+## Назначение (простыми словами)
 
-Сервис виртуального брокера/исполнения сделок (пока каркас). На шаге 1.3 добавлена межсервисная безопасность: сервис валидирует JWT access token от gateway и проверяет permissions.
+Каркас "виртуального брокера". Сейчас он используется как пример защищённых бизнес-ручек,
+которые требуют permissions от gateway.
 
-- Проверка access token (resource-server) (шаг 1.3)
-- Демонстрация permission-check на заглушках (шаг 1.3)
+Если очень просто: это «тренировочный брокер», который не торгует по‑настоящему,
+но даёт понять, как будут проверяться права на операции.
 
-## Ручки
+## Как это работает
 
-- `GET /ping` — открытая проверка доступности
-- `GET /api/broker/secure-sample` — требует `PERM_BROKER_READ` (шаг 1.3)
-- `POST /api/broker/trade-sample` — требует `PERM_BROKER_TRADE` (шаг 1.3)
+1) Клиент вызывает защищённую ручку.
+2) Spring Security валидирует JWT access token (подпись + issuer).
+3) `JwtAuthConverter` превращает claims `roles`/`perms` в authorities.
+4) `@PreAuthorize` проверяет нужный `PERM_*`.
 
-## Конфигурация
+## Как реализовано (карта кода)
 
-- `JWT_SECRET` должен совпадать с gateway (шаг 1.3)
-- issuer по умолчанию `lsp-api-gateway` (шаг 1.3)
+Для ориентира достаточно посмотреть `SecurityConfig` и `SecureDemoController` —
+это две ключевые точки, где видно проверку токена и прав.
+
+- `security/SecurityConfig` — resource-server конфигурация.
+- `security/JwtAuthConverter` — маппинг claims в authorities.
+- `api/SecureDemoController` — защищённые ручки.
+- `api/PingController` — открытый `GET /ping`.
+
+## API
+
+- `GET /ping` — проверка доступности.
+- `GET /api/broker/secure-sample` — требует `PERM_BROKER_READ`.
+- `POST /api/broker/trade-sample` — требует `PERM_BROKER_TRADE`.
+
+## Конфигурация и env
+
+- `JWT_SECRET` — общий секрет с gateway (не менее 32 байт).
+- `JWT_ISSUER` — по умолчанию `lsp-api-gateway`.
+
+Порт по умолчанию: `8083`.
+
+## Локальный запуск
+
+```bash
+mvn -pl services/virtual-broker-service spring-boot:run
+```
+
+Проверка (нужен валидный access token от gateway):
+
+```bash
+curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  http://localhost:8083/api/broker/secure-sample
+```
 
 ## Ограничения
 
-Эндпоинты в сервисе пока демонстрационные. Реальные сделки/портфель/позиции будут добавляться позже.
+Реальной торговой логики нет, ручки демонстрационные.

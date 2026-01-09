@@ -5,6 +5,10 @@ import com.logicsignalprotector.apitelegram.client.CommandCenterClient;
 import com.logicsignalprotector.apitelegram.client.TelegramBotClient;
 import com.logicsignalprotector.apitelegram.model.ChatMessageEnvelope;
 import com.logicsignalprotector.apitelegram.model.ChatResponse;
+import com.logicsignalprotector.apitelegram.model.InlineKeyboard;
+import com.logicsignalprotector.apitelegram.model.OutgoingMessage;
+import com.logicsignalprotector.apitelegram.model.RenderMode;
+import com.logicsignalprotector.apitelegram.model.UiHints;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,7 +17,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Step 1.3: optional Telegram long-polling mode.
+ * Step 1.3-1.5: optional Telegram long-polling mode.
  *
  * <p>Useful for local development without a public webhook URL. Enabled only when
  * telegram.polling.enabled=true.
@@ -57,6 +61,12 @@ public class TelegramPollingRunner {
         long updateId = upd.path("update_id").asLong(-1);
         if (updateId > maxUpdateId) maxUpdateId = updateId;
 
+        JsonNode callback = upd.path("callback_query");
+        if (!callback.isMissingNode() && !callback.isNull()) {
+          handleCallback(callback);
+          continue;
+        }
+
         JsonNode message = upd.path("message");
         if (message.isMissingNode() || message.isNull()) {
           continue;
@@ -77,16 +87,10 @@ public class TelegramPollingRunner {
         String messageId = message.path("message_id").asText(null);
 
         ChatMessageEnvelope env =
-            new ChatMessageEnvelope("telegram", fromId, chatId, messageId, text);
+            new ChatMessageEnvelope("telegram", fromId, chatId, messageId, text, null);
 
         ChatResponse response = commandCenter.send(env);
-        if (response != null && response.messages() != null) {
-          for (var m : response.messages()) {
-            if (m != null && m.text() != null && !m.text().isBlank()) {
-              bot.sendMessage(chatId, m.text());
-            }
-          }
-        }
+        sendResponse(chatId, messageId, false, response);
       }
 
       // Telegram expects next offset = last_update_id + 1
@@ -95,5 +99,89 @@ public class TelegramPollingRunner {
     } catch (Exception e) {
       log.warn("Telegram polling failed: {}", e.getMessage());
     }
+  }
+
+  private void handleCallback(JsonNode callback) {
+    JsonNode message = callback.path("message");
+    if (message.isMissingNode() || message.isNull()) {
+      return;
+    }
+
+    String chatId = message.path("chat").path("id").asText();
+    String fromId = callback.path("from").path("id").asText();
+    String messageId = message.path("message_id").asText(null);
+    String callbackId = callback.path("id").asText(null);
+    String callbackData = callback.path("data").asText("").trim();
+
+    if (callbackData.isBlank()) {
+      return;
+    }
+
+    ChatMessageEnvelope env =
+        new ChatMessageEnvelope("telegram", fromId, chatId, messageId, null, callbackData);
+
+    ChatResponse response = commandCenter.send(env);
+    sendResponse(chatId, messageId, true, response);
+    if (callbackId != null && !callbackId.isBlank()) {
+      bot.answerCallbackQuery(callbackId);
+    }
+  }
+
+  private void sendResponse(
+      String chatId, String sourceMessageId, boolean allowEdit, ChatResponse response) {
+    if (response == null || response.messages() == null) {
+      return;
+    }
+
+    boolean deleteRequested = false;
+    for (OutgoingMessage m : response.messages()) {
+      if (m == null || m.text() == null || m.text().isBlank()) {
+        continue;
+      }
+
+      UiHints hints = m.uiHints();
+      boolean preferEdit = hints != null && hints.preferEdit();
+      boolean deleteSource = hints != null && hints.deleteSourceMessage();
+      InlineKeyboard keyboard = hints == null ? null : hints.inlineKeyboard();
+
+      String renderedText = renderText(m.text(), hints);
+      String parseMode = hints == null ? null : hints.parseModeHint();
+      if (hints != null
+          && hints.renderMode() == RenderMode.PRE
+          && (parseMode == null || parseMode.isBlank())) {
+        parseMode = "HTML";
+      }
+
+      if (preferEdit && allowEdit && sourceMessageId != null) {
+        bot.editMessageText(chatId, sourceMessageId, renderedText, parseMode, keyboard);
+      } else {
+        bot.sendMessage(chatId, renderedText, parseMode, keyboard);
+      }
+
+      deleteRequested = deleteRequested || deleteSource;
+    }
+
+    if (deleteRequested && sourceMessageId != null) {
+      bot.deleteMessage(chatId, sourceMessageId);
+    }
+  }
+
+  private static String renderText(String text, UiHints hints) {
+    if (hints == null || hints.renderMode() == null) {
+      return text;
+    }
+    if (hints.renderMode() != RenderMode.PRE) {
+      return text;
+    }
+    return "<pre>" + escapeHtml(text) + "</pre>";
+  }
+
+  private static String escapeHtml(String s) {
+    if (s == null) return "";
+    String out = s;
+    out = out.replace("&", "&amp;");
+    out = out.replace("<", "&lt;");
+    out = out.replace(">", "&gt;");
+    return out;
   }
 }

@@ -7,4 +7,5 @@ public record ChatMessageEnvelope(
     @NotBlank String externalUserId,
     @NotBlank String chatId,
     String messageId,
-    @NotBlank String text) {}
+    String text,
+    String callbackData) {}

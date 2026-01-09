@@ -37,6 +37,12 @@ services:
 chat:
   state:
     ttl: ${CHAT_STATE_TTL:PT10M}
+  hard-delete:
+    confirm-ttl: ${CHAT_HARD_DELETE_CONFIRM_TTL:PT60S}
+
+command:
+  switch:
+    cache-ttl: ${COMMAND_SWITCH_CACHE_TTL:PT10S}
 
 # Step 1.4: in-memory rate-limit for /adminlogin (dev backdoor code).
 dev:
@@ -44,3 +50,5 @@ dev:
     rate:
       window: ${DEV_ADMINLOGIN_RATE_WINDOW:PT10M}
       max-attempts: ${DEV_ADMINLOGIN_RATE_MAX_ATTEMPTS:5}
+  console:
+    enabled: ${DEV_CONSOLE_ENABLED:false}

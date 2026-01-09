@@ -2,17 +2,28 @@ package com.logicsignalprotector.commandcenter.domain;
 
 import com.logicsignalprotector.commandcenter.api.dto.ChatMessageEnvelope;
 import com.logicsignalprotector.commandcenter.api.dto.ChatResponse;
+import com.logicsignalprotector.commandcenter.api.dto.InlineKeyboard;
+import com.logicsignalprotector.commandcenter.api.dto.OutgoingMessage;
 import com.logicsignalprotector.commandcenter.client.DownstreamClients;
 import com.logicsignalprotector.commandcenter.client.GatewayInternalClient;
+import com.logicsignalprotector.commandcenter.domain.CommandRegistry.CommandDef;
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
 
 /**
- * Step 1.3-1.4: core "brain" for chat commands.
+ * Step 1.3-1.5: core "brain" for chat commands.
  *
  * <p>Input: raw user message in a universal envelope. Output: a list of texts to send back to the
  * user.
@@ -21,13 +32,23 @@ import org.springframework.web.client.RestClientResponseException;
 @Slf4j
 public class ChatCommandHandler {
 
+  private static final String PERM_ADMIN_ANSWERS_LOG = "ADMIN_ANSWERS_LOG";
+  private static final String PERM_ADMIN_MANAGE = "ADMIN_USERS_PERMS_REVOKE";
+  private static final String PERM_COMMANDS_TOGGLE = "COMMANDS_TOGGLE";
+  private static final String PERM_DEVGOD = "DEVGOD";
+  private static final String PERM_USERS_HARD_DELETE = "USERS_HARD_DELETE";
+
+  private static final int COMMANDS_PAGE_SIZE = 10;
+
   private final GatewayInternalClient gateway;
   private final DownstreamClients downstream;
   private final ChatStateStore stateStore;
   private final AdminCodeRateLimiter adminCodeLimiter;
+  private final CommandRegistry registry;
+  private final CommandSwitchCache switches;
   private final Duration logoutConfirmTtl;
-
-  private static final String PERM_ADMIN_ANSWERS_LOG = "ADMIN_ANSWERS_LOG";
+  private final Duration hardDeleteConfirmTtl;
+  private final boolean devConsoleEnabled;
 
   private final Map<String, String> aliases = buildAliases();
 
@@ -36,64 +57,96 @@ public class ChatCommandHandler {
       DownstreamClients downstream,
       ChatStateStore stateStore,
       AdminCodeRateLimiter adminCodeLimiter,
-      @Value("${chat.logout.confirm-ttl:PT60S}") Duration logoutConfirmTtl) {
+      CommandRegistry registry,
+      CommandSwitchCache switches,
+      @Value("${chat.logout.confirm-ttl:PT60S}") Duration logoutConfirmTtl,
+      @Value("${chat.hard-delete.confirm-ttl:PT60S}") Duration hardDeleteConfirmTtl,
+      @Value("${dev.console.enabled:false}") boolean devConsoleEnabled) {
     this.gateway = gateway;
     this.downstream = downstream;
     this.stateStore = stateStore;
     this.adminCodeLimiter = adminCodeLimiter;
+    this.registry = registry;
+    this.switches = switches;
     this.logoutConfirmTtl = logoutConfirmTtl;
+    this.hardDeleteConfirmTtl = hardDeleteConfirmTtl;
+    this.devConsoleEnabled = devConsoleEnabled;
   }
 
   public ChatResponse handle(ChatMessageEnvelope env) {
-    String text = env.text() == null ? "" : env.text().trim();
-    if (text.isBlank()) {
+    String input = extractInput(env);
+    if (input.isBlank()) {
       return ChatResponse.ofText("Пустое сообщение.");
     }
 
+    String normalized = normalizeInput(input);
     String key = stateKey(env);
-    ChatState st = stateStore.get(key).orElse(ChatState.NONE);
+
+    ChatStateStore.StateEntry entry =
+        stateStore.get(key).orElse(new ChatStateStore.StateEntry(ChatState.NONE, null));
+    ChatState st = entry.state();
 
     // cancel should work in any state
-    if (isCancel(text)) {
+    if (isCancel(normalized)) {
       stateStore.clear(key);
       return ChatResponse.ofText("Ок, отменено.");
     }
 
     // special state: logout confirmation
     if (st == ChatState.AWAIT_LOGOUT_CONFIRM) {
-      return handleLogoutConfirm(env, key, text);
+      return handleLogoutConfirm(env, key, normalized);
+    }
+
+    // special state: hard delete confirmation
+    if (st == ChatState.AWAIT_USER_HARD_DELETE_CONFIRM) {
+      return handleHardDeleteConfirm(env, key, entry.payload(), normalized);
     }
 
     // If we're waiting for credentials, accept plain "login password" as the next input.
-    if (st == ChatState.AWAIT_LOGIN_CREDENTIALS && !text.startsWith("/")) {
-      if (!looksLikeCredentials(text)) {
+    if (st == ChatState.AWAIT_LOGIN_CREDENTIALS && !normalized.startsWith("/")) {
+      if (!looksLikeCredentials(normalized)) {
         return ChatResponse.ofText("Нужно 2 значения: <login> <password> (или /cancel)");
       }
-      return doLoginAndLink(env, key, text);
+      return doLoginAndLink(env, key, normalized);
     }
-    if (st == ChatState.AWAIT_REGISTER_CREDENTIALS && !text.startsWith("/")) {
-      if (!looksLikeCredentials(text)) {
+    if (st == ChatState.AWAIT_REGISTER_CREDENTIALS && !normalized.startsWith("/")) {
+      if (!looksLikeCredentials(normalized)) {
         return ChatResponse.ofText("Нужно 2 значения: <login> <password> (или /cancel)");
       }
-      return doRegisterAndLink(env, key, text);
+      return doRegisterAndLink(env, key, normalized);
     }
 
-    Parsed p = parse(text);
+    Parsed p = parse(normalized);
+    boolean isUserDelete = "/user".equals(p.cmd()) && "delete".equalsIgnoreCase(p.arg1());
+    CommandDef def = isUserDelete ? registry.byCode("user_delete") : registry.byCommand(p.cmd());
+
+    if (def == null) {
+      return ChatResponse.ofText("Не понял команду. /help");
+    }
+    if (def.devOnly() && !devConsoleEnabled) {
+      return ChatResponse.ofText("Команда недоступна.");
+    }
+    if (def.toggleable() && !switches.isEnabled(def.code())) {
+      return ChatResponse.ofText("Команда отключена.");
+    }
 
     return switch (p.cmd()) {
-      case "/start", "/help" -> ChatResponse.ofText(helpText());
+      case "/start", "/help" -> doHelp(env);
+      case "/helpdev" -> doHelpDev(env);
+      case "/commands" -> doCommands(env, p);
+      case "/command" -> doCommandToggle(env, p);
       case "/login" -> handleLoginCommand(env, key, p);
       case "/register" -> handleRegisterCommand(env, key, p);
       case "/logout" -> handleLogoutRequest(env, key, p);
       case "/me" -> doMe(env);
-      case "/market" -> doProtectedCall(env, "market");
-      case "/alerts" -> doProtectedCall(env, "alerts");
-      case "/broker" -> doProtectedCall(env, "broker");
-      case "/trade" -> doProtectedCall(env, "trade");
+      case "/market" -> doProtectedCall(env, "market", "MARKETDATA_READ");
+      case "/alerts" -> doProtectedCall(env, "alerts", "ALERTS_READ");
+      case "/broker" -> doProtectedCall(env, "broker", "BROKER_READ");
+      case "/trade" -> doProtectedCall(env, "trade", "BROKER_TRADE");
 
       // Step 1.4 admin console commands
       case "/adminlogin" -> doAdminLogin(env, p);
-      case "/user" -> doAdminUser(env, p);
+      case "/user" -> isUserDelete ? doUserHardDelete(env, key, p) : doAdminUser(env, p);
       case "/users" -> doAdminUsers(env);
       case "/roles" -> doAdminRoles(env);
       case "/perms" -> doAdminPerms(env);
@@ -110,6 +163,142 @@ public class ChatCommandHandler {
   /* =========================
   Command handlers
   ========================= */
+
+  private ChatResponse doHelp(ChatMessageEnvelope env) {
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      Set<String> perms =
+          res != null && res.perms() != null ? new HashSet<>(res.perms()) : Set.of();
+      boolean linked = res != null && res.linked();
+
+      List<CommandDef> visible =
+          registry.all().stream()
+              .filter(CommandDef::showInHelp)
+              .filter(def -> !def.devOnly() || devConsoleEnabled)
+              .filter(def -> !def.toggleable() || switches.isEnabled(def.code()))
+              .filter(def -> isPermitted(def, perms, linked))
+              .sorted(Comparator.comparing(CommandDef::command))
+              .toList();
+
+      String text = "Команды:\n" + formatCommandList(visible);
+      return ChatResponse.ofText(text);
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "help", e));
+    }
+  }
+
+  private ChatResponse doHelpDev(ChatMessageEnvelope env) {
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!res.linked()) {
+        return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (!res.perms().contains(PERM_DEVGOD)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
+
+      List<CommandDef> visible =
+          registry.all().stream()
+              .filter(CommandDef::devOnly)
+              .filter(def -> !"helpdev".equals(def.code()))
+              .filter(CommandDef::showInHelp)
+              .filter(def -> !def.toggleable() || switches.isEnabled(def.code()))
+              .sorted(Comparator.comparing(CommandDef::command))
+              .toList();
+
+      String text = "Dev-команды:\n" + formatCommandList(visible);
+      return ChatResponse.ofText(text);
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "helpdev", e));
+    }
+  }
+
+  private ChatResponse doCommands(ChatMessageEnvelope env, Parsed p) {
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!res.linked()) {
+        return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (!hasAnyPerm(res.perms(), Set.of(PERM_COMMANDS_TOGGLE, PERM_DEVGOD))) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
+
+      int page = parsePage(p.arg1());
+      List<CommandDef> all = new ArrayList<>(registry.all());
+      all.sort(Comparator.comparing(CommandDef::code));
+
+      int totalPages = Math.max(1, (int) Math.ceil(all.size() / (double) COMMANDS_PAGE_SIZE));
+      page = Math.max(1, Math.min(page, totalPages));
+
+      int from = (page - 1) * COMMANDS_PAGE_SIZE;
+      int to = Math.min(from + COMMANDS_PAGE_SIZE, all.size());
+      List<CommandDef> slice = all.subList(from, to);
+
+      String header = "Commands page " + page + "/" + totalPages;
+      String text = header + "\n" + formatCommandsPage(slice);
+
+      OutgoingMessage msg = OutgoingMessage.plain(text).preferEdit();
+      InlineKeyboard keyboard = buildCommandsPager(page, totalPages);
+      if (keyboard != null) {
+        msg = msg.withKeyboard(keyboard);
+      }
+      return ChatResponse.of(msg);
+
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "commands", e));
+    }
+  }
+
+  private ChatResponse doCommandToggle(ChatMessageEnvelope env, Parsed p) {
+    String action = p.arg1();
+    String code = p.arg2();
+    String note = p.arg3();
+
+    if (action == null || code == null) {
+      return ChatResponse.ofText("Использование: /command enable|disable <code> [note]");
+    }
+
+    boolean enabled;
+    if ("enable".equalsIgnoreCase(action)) {
+      enabled = true;
+    } else if ("disable".equalsIgnoreCase(action)) {
+      enabled = false;
+    } else {
+      return ChatResponse.ofText("Использование: /command enable|disable <code> [note]");
+    }
+
+    code = code.trim();
+    if (code.startsWith("/")) {
+      CommandDef byCmd = registry.byCommand(code);
+      if (byCmd != null) {
+        code = byCmd.code();
+      }
+    }
+    code = code.toLowerCase(Locale.ROOT);
+
+    CommandDef target = registry.byCode(code);
+    if (target == null) {
+      return ChatResponse.ofText("Неизвестная команда: " + code);
+    }
+    if (!target.toggleable()) {
+      return ChatResponse.ofText("Эту команду нельзя отключить.");
+    }
+
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!res.linked()) {
+        return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (!hasAnyPerm(res.perms(), Set.of(PERM_COMMANDS_TOGGLE, PERM_DEVGOD))) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
+
+      gateway.setCommandEnabled(res.userId(), target.code(), enabled, note);
+      return doCommands(env, new Parsed("/commands", "page=1", null, null));
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "command", e));
+    }
+  }
 
   private ChatResponse handleLoginCommand(ChatMessageEnvelope env, String key, Parsed p) {
     if (p.arg1() == null || p.arg2() == null) {
@@ -138,7 +327,7 @@ public class ChatCommandHandler {
         String.join(
             "\n",
             "Подтверди logout:",
-            "- отправь: logout yes (или logout да)", // also works with /logout yes
+            "- отправь: logout yes (или logout да)",
             "- отмена: cancel (или отмена)"));
   }
 
@@ -151,7 +340,7 @@ public class ChatCommandHandler {
         && ("yes".equalsIgnoreCase(p.arg1()) || "да".equalsIgnoreCase(p.arg1()))) {
       confirmed = true;
     }
-    // (assumption) allow plain "yes" as convenience
+    // allow plain "yes" as convenience
     if (!confirmed
         && !text.startsWith("/")
         && ("yes".equalsIgnoreCase(text.trim()) || "да".equalsIgnoreCase(text.trim()))) {
@@ -171,6 +360,62 @@ public class ChatCommandHandler {
     } catch (RestClientResponseException e) {
       boolean canRaw = canSeeRaw(env);
       return ChatResponse.ofText(formatError(canRaw, "logout", e));
+    }
+  }
+
+  private ChatResponse handleHardDeleteConfirm(
+      ChatMessageEnvelope env, String key, String payload, String text) {
+    if (payload == null || payload.isBlank()) {
+      stateStore.clear(key);
+      return ChatResponse.ofText("Подтверждение истекло.");
+    }
+
+    String trimmed = text.trim();
+    if (!trimmed.toUpperCase(Locale.ROOT).startsWith("DELETE ")) {
+      return ChatResponse.ofText("Неверное подтверждение. Ожидаю: DELETE " + payload);
+    }
+
+    String target = trimmed.substring("DELETE ".length()).trim();
+    if (!target.equalsIgnoreCase(payload)) {
+      return ChatResponse.ofText("Неверное подтверждение. Ожидаю: DELETE " + payload);
+    }
+
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!res.linked()) {
+        return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (!hasAllPerm(res.perms(), Set.of(PERM_DEVGOD, PERM_USERS_HARD_DELETE))) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
+
+      Long targetId = parseLongOrNull(target);
+      gateway.hardDeleteUser(res.userId(), targetId, targetId == null ? target : null);
+      stateStore.clear(key);
+      return ChatResponse.ofText("Удалено: " + target);
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "hard-delete", e));
+    }
+  }
+
+  private ChatResponse doUserHardDelete(ChatMessageEnvelope env, String key, Parsed p) {
+    if (p.arg2() == null || p.arg2().isBlank()) {
+      return ChatResponse.ofText("Использование: /user delete <login|id>");
+    }
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!res.linked()) {
+        return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (!hasAllPerm(res.perms(), Set.of(PERM_DEVGOD, PERM_USERS_HARD_DELETE))) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
+
+      String target = p.arg2().trim();
+      stateStore.set(key, ChatState.AWAIT_USER_HARD_DELETE_CONFIRM, target, hardDeleteConfirmTtl);
+      return ChatResponse.ofText("Подтверди: DELETE " + target);
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "user_delete", e));
     }
   }
 
@@ -213,12 +458,19 @@ public class ChatCommandHandler {
       stateStore.clear(key);
 
       boolean canRaw = t != null && t.perms() != null && t.perms().contains(PERM_ADMIN_ANSWERS_LOG);
+      OutgoingMessage msg;
       if (!canRaw) {
-        return ChatResponse.ofText(
-            "Ок. Привязка завершена. login=" + safe(t == null ? null : t.login()));
+        msg =
+            OutgoingMessage.plain(
+                    "Ок. Привязка завершена. login=" + safe(t == null ? null : t.login()))
+                .deleteSourceMessage();
+      } else {
+        msg =
+            OutgoingMessage.plain(
+                    "Ок. Привязка завершена.\nlogin=" + safe(t.login()) + "\nperms=" + t.perms())
+                .deleteSourceMessage();
       }
-      return ChatResponse.ofText(
-          "Ок. Привязка завершена.\nlogin=" + safe(t.login()) + "\nperms=" + t.perms());
+      return ChatResponse.of(msg);
     } catch (RestClientResponseException e) {
       stateStore.set(key, ChatState.AWAIT_LOGIN_CREDENTIALS);
       return ChatResponse.ofText(formatError(canSeeRaw(env), "login", e));
@@ -238,23 +490,37 @@ public class ChatCommandHandler {
       stateStore.clear(key);
 
       boolean canRaw = t != null && t.perms() != null && t.perms().contains(PERM_ADMIN_ANSWERS_LOG);
+      OutgoingMessage msg;
       if (!canRaw) {
-        return ChatResponse.ofText(
-            "Ок. Пользователь создан и привязан. login=" + safe(t == null ? null : t.login()));
+        msg =
+            OutgoingMessage.plain(
+                    "Ок. Пользователь создан и привязан. login="
+                        + safe(t == null ? null : t.login()))
+                .deleteSourceMessage();
+      } else {
+        msg =
+            OutgoingMessage.plain(
+                    "Ок. Пользователь создан и привязан.\nlogin="
+                        + safe(t.login())
+                        + "\nperms="
+                        + t.perms())
+                .deleteSourceMessage();
       }
-      return ChatResponse.ofText(
-          "Ок. Пользователь создан и привязан.\nlogin=" + safe(t.login()) + "\nperms=" + t.perms());
+      return ChatResponse.of(msg);
     } catch (RestClientResponseException e) {
       stateStore.set(key, ChatState.AWAIT_REGISTER_CREDENTIALS);
       return ChatResponse.ofText(formatError(canSeeRaw(env), "register", e));
     }
   }
 
-  private ChatResponse doProtectedCall(ChatMessageEnvelope env, String kind) {
+  private ChatResponse doProtectedCall(ChatMessageEnvelope env, String kind, String requiredPerm) {
     try {
       var res = gateway.resolve(providerCode(env), env.externalUserId());
       if (!res.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (requiredPerm != null && !res.perms().contains(requiredPerm)) {
+        return ChatResponse.ofText("Нет прав для операции.");
       }
 
       boolean canRaw = res.perms().contains(PERM_ADMIN_ANSWERS_LOG);
@@ -324,6 +590,9 @@ public class ChatCommandHandler {
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
       }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
       boolean canRaw = r.perms().contains(PERM_ADMIN_ANSWERS_LOG);
 
       var u = gateway.getUser(r.userId(), p.arg1());
@@ -342,14 +611,17 @@ public class ChatCommandHandler {
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
       }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
       var list = gateway.listUsers(r.userId());
-      if (list == null || list.users() == null) {
+      if (list == null || list.users() == null || list.users().isEmpty()) {
         return ChatResponse.ofText("Пусто.");
       }
-      StringBuilder sb = new StringBuilder();
-      sb.append("Users (" + list.users().size() + "):\n");
+
+      StringBuilder sb = new StringBuilder("Пользователи:\n");
       for (var u : list.users()) {
-        sb.append("- ").append(u.login()).append(" (id=").append(u.userId()).append(")\n");
+        sb.append("- ").append(u.userId()).append(": ").append(safe(u.login())).append("\n");
       }
       return ChatResponse.ofText(sb.toString().trim());
     } catch (RestClientResponseException e) {
@@ -363,13 +635,16 @@ public class ChatCommandHandler {
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
       }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
       var roles = gateway.listRoles(r.userId());
-      if (roles == null || roles.roles() == null) {
+      if (roles == null || roles.roles() == null || roles.roles().isEmpty()) {
         return ChatResponse.ofText("Пусто.");
       }
-      StringBuilder sb = new StringBuilder("Roles:\n");
+      StringBuilder sb = new StringBuilder("Роли:\n");
       for (var role : roles.roles()) {
-        sb.append("- ").append(role.code()).append(" : ").append(safe(role.name())).append("\n");
+        sb.append("- ").append(role.code()).append(" - ").append(safe(role.name())).append("\n");
       }
       return ChatResponse.ofText(sb.toString().trim());
     } catch (RestClientResponseException e) {
@@ -383,13 +658,16 @@ public class ChatCommandHandler {
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
       }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
       var perms = gateway.listPerms(r.userId());
-      if (perms == null || perms.perms() == null) {
+      if (perms == null || perms.perms() == null || perms.perms().isEmpty()) {
         return ChatResponse.ofText("Пусто.");
       }
-      StringBuilder sb = new StringBuilder("Perms:\n");
+      StringBuilder sb = new StringBuilder("Права:\n");
       for (var perm : perms.perms()) {
-        sb.append("- ").append(perm.code()).append(" : ").append(safe(perm.name())).append("\n");
+        sb.append("- ").append(perm.code()).append(" - ").append(safe(perm.name())).append("\n");
       }
       return ChatResponse.ofText(sb.toString().trim());
     } catch (RestClientResponseException e) {
@@ -418,6 +696,9 @@ public class ChatCommandHandler {
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
       }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
       boolean canRaw = r.perms().contains(PERM_ADMIN_ANSWERS_LOG);
 
       var u =
@@ -445,6 +726,9 @@ public class ChatCommandHandler {
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
       }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
       boolean canRaw = r.perms().contains(PERM_ADMIN_ANSWERS_LOG);
 
       var u =
@@ -470,6 +754,9 @@ public class ChatCommandHandler {
       var r = gateway.resolve(providerCode(env), env.externalUserId());
       if (!r.linked()) {
         return ChatResponse.ofText("Сначала привяжи аккаунт: /login");
+      }
+      if (!r.perms().contains(PERM_ADMIN_MANAGE)) {
+        return ChatResponse.ofText("Нет прав для операции.");
       }
       boolean canRaw = r.perms().contains(PERM_ADMIN_ANSWERS_LOG);
 
@@ -516,7 +803,11 @@ public class ChatCommandHandler {
     m.put("/старт", "/start");
     m.put("/help", "/help");
     m.put("/помощь", "/help");
+    m.put("/хелп", "/help");
     m.put("/команды", "/help");
+
+    // dev help
+    m.put("/helpdev", "/helpdev");
 
     // login/register aliases
     m.put("/login", "/login");
@@ -578,6 +869,10 @@ public class ChatCommandHandler {
     m.put("/revokeperm", "/revokeperm");
     m.put("/снятьправо", "/revokeperm");
 
+    // command switches
+    m.put("/commands", "/commands");
+    m.put("/command", "/command");
+
     return m;
   }
 
@@ -595,6 +890,36 @@ public class ChatCommandHandler {
     return providerCode(env) + "|" + env.externalUserId();
   }
 
+  private String extractInput(ChatMessageEnvelope env) {
+    String callback = env.callbackData();
+    if (callback != null && !callback.isBlank()) {
+      return callback.trim();
+    }
+    String text = env.text();
+    return text == null ? "" : text.trim();
+  }
+
+  private static String normalizeInput(String input) {
+    String trimmed = input == null ? "" : input.trim();
+    if (!trimmed.startsWith("cmd:")) {
+      return trimmed;
+    }
+    String rest = trimmed.substring("cmd:".length());
+    String[] parts = rest.split(":");
+    if (parts.length == 0) {
+      return trimmed;
+    }
+    String cmd = parts[0];
+    if (cmd.startsWith("/")) {
+      cmd = cmd.substring(1);
+    }
+    StringBuilder sb = new StringBuilder("/").append(cmd);
+    for (int i = 1; i < parts.length; i++) {
+      sb.append(" ").append(parts[i]);
+    }
+    return sb.toString();
+  }
+
   /**
    * canSeeRaw(env) is a best-effort check:
    *
@@ -610,37 +935,119 @@ public class ChatCommandHandler {
     }
   }
 
-  private static String helpText() {
-    return String.join(
-        "\n",
-        "Доступные команды:",
-        "/start | start | старт - показать help",
-        "/help | help | помощь - список команд",
-        "/login | login | логин - вход и привязка",
-        "/register | register | регистрация - регистрация и привязка",
-        "/logout | logout | логаут - отвязка (с подтверждением)",
-        "/me | me | я - информация о привязке",
-        "/market | market | рынок - demo: защищённая ручка market-data-service",
-        "/alerts | alerts | уведомления - demo: защищённая ручка alerts-service",
-        "/broker | broker | брокер - demo: защищённая ручка broker-service",
-        "/trade | trade | сделка - demo: защищённая POST-ручка broker-service",
-        "/cancel | cancel | отмена - отменить текущий ввод",
-        "",
-        "(admin/dev) /adminlogin | adminlogin | админлогин <code> - выдать себе роль ADMIN (если включено)",
-        "(admin) /users | users | пользователи - список пользователей",
-        "(admin) /user | user | пользователь <login> - инфо по пользователю",
-        "(admin) /roles | roles | роли - справочник ролей",
-        "(admin) /perms | perms | права - справочник прав",
-        "(admin) /grantrole | grantrole | выдатьроль <login> <roleCode>",
-        "(admin) /revokerole | revokerole | отозватьроль <login> <roleCode>",
-        "(admin) /grantperm | grantperm | разрешитьправо <login> <permCode> [reason]",
-        "(admin) /denyperm | denyperm | запретитьправо <login> <permCode> [reason]",
-        "(admin) /revokeperm | revokeperm | снятьправо <login> <permCode>",
-        "",
-        "Подсказка:",
-        "- Можно писать команды без '/', например: login, логин, выход, пользователи",
-        "- Для login/register можно сначала отправить команду, затем отдельным сообщением: <login> <password>",
-        "- Для logout подтверждение: logout yes (или logout да)");
+  private static boolean isPermitted(CommandDef def, Set<String> perms, boolean linked) {
+    if ((!def.requiredAllPerms().isEmpty() || !def.requiredAnyPerms().isEmpty()) && !linked) {
+      return false;
+    }
+    if (!def.requiredAllPerms().isEmpty() && !perms.containsAll(def.requiredAllPerms())) {
+      return false;
+    }
+    if (!def.requiredAnyPerms().isEmpty()) {
+      for (String p : def.requiredAnyPerms()) {
+        if (perms.contains(p)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return true;
+  }
+
+  private static boolean hasAnyPerm(List<String> perms, Set<String> any) {
+    if (perms == null || perms.isEmpty()) return false;
+    for (String p : perms) {
+      if (any.contains(p)) return true;
+    }
+    return false;
+  }
+
+  private static boolean hasAllPerm(List<String> perms, Set<String> all) {
+    if (perms == null || perms.isEmpty()) return false;
+    return perms.containsAll(all);
+  }
+
+  private InlineKeyboard buildCommandsPager(int page, int totalPages) {
+    if (totalPages <= 1) {
+      return null;
+    }
+    List<InlineKeyboard.Button> row = new ArrayList<>();
+    if (page > 1) {
+      row.add(new InlineKeyboard.Button("Prev", "cmd:commands:page=" + (page - 1)));
+    }
+    if (page < totalPages) {
+      row.add(new InlineKeyboard.Button("Next", "cmd:commands:page=" + (page + 1)));
+    }
+    return row.isEmpty() ? null : new InlineKeyboard(List.of(row));
+  }
+
+  private static int parsePage(String arg) {
+    if (arg == null || arg.isBlank()) return 1;
+    String t = arg.trim();
+    if (t.startsWith("page=")) {
+      t = t.substring("page=".length());
+    }
+    try {
+      return Integer.parseInt(t);
+    } catch (NumberFormatException e) {
+      return 1;
+    }
+  }
+
+  private static String formatPermRequirement(CommandDef def) {
+    if (!def.requiredAllPerms().isEmpty() && !def.requiredAnyPerms().isEmpty()) {
+      return "ALL("
+          + String.join(",", def.requiredAllPerms())
+          + ")|ANY("
+          + String.join(",", def.requiredAnyPerms())
+          + ")";
+    }
+    if (!def.requiredAllPerms().isEmpty()) {
+      return "ALL(" + String.join(",", def.requiredAllPerms()) + ")";
+    }
+    if (!def.requiredAnyPerms().isEmpty()) {
+      return "ANY(" + String.join(",", def.requiredAnyPerms()) + ")";
+    }
+    return "-";
+  }
+
+  private static String formatCommandList(List<CommandDef> defs) {
+    StringBuilder sb = new StringBuilder();
+    for (CommandDef def : defs) {
+      sb.append(def.command()).append(" - ").append(safe(def.description())).append("\n");
+    }
+    return sb.toString().trim();
+  }
+
+  private String formatCommandsPage(List<CommandDef> defs) {
+    StringBuilder sb = new StringBuilder();
+    for (CommandDef def : defs) {
+      String enabled = def.toggleable() ? (switches.isEnabled(def.code()) ? "on" : "off") : "on";
+      String toggle = def.toggleable() ? "toggle" : "fixed";
+      String perm = formatPermRequirement(def);
+      sb.append("- ")
+          .append(def.code())
+          .append(" [")
+          .append(enabled)
+          .append(", ")
+          .append(toggle)
+          .append(", perm=")
+          .append(perm)
+          .append("] - ")
+          .append(safe(def.description()))
+          .append("\n");
+    }
+    return sb.toString().trim();
+  }
+
+  private static Long parseLongOrNull(String s) {
+    if (s == null) return null;
+    String t = s.trim();
+    if (t.isBlank()) return null;
+    try {
+      return Long.parseLong(t);
+    } catch (NumberFormatException e) {
+      return null;
+    }
   }
 
   private static String safe(String s) {

@@ -176,6 +176,35 @@ public class GatewayInternalClient {
         .body(UserInfoResponse.class);
   }
 
+  // Step 1.5: command switches
+  public ListCommandSwitchesResponse listCommandSwitches() {
+    return rest.get()
+        .uri("/internal/commands/list")
+        .header("X-Internal-Token", internalToken)
+        .retrieve()
+        .body(ListCommandSwitchesResponse.class);
+  }
+
+  public SetEnabledResponse setCommandEnabled(
+      long actorUserId, String commandCode, boolean enabled, String note) {
+    return rest.post()
+        .uri("/internal/commands/set-enabled")
+        .header("X-Internal-Token", internalToken)
+        .body(new SetEnabledRequest(actorUserId, commandCode, enabled, note))
+        .retrieve()
+        .body(SetEnabledResponse.class);
+  }
+
+  public HardDeleteResponse hardDeleteUser(
+      long actorUserId, Long targetUserId, String targetLogin) {
+    return rest.post()
+        .uri("/internal/users/hard-delete")
+        .header("X-Internal-Token", internalToken)
+        .body(new HardDeleteRequest(actorUserId, targetUserId, targetLogin))
+        .retrieve()
+        .body(HardDeleteResponse.class);
+  }
+
   public record ResolveRequest(String providerCode, String externalUserId) {}
 
   public record ResolveResponse(
@@ -236,4 +265,22 @@ public class GatewayInternalClient {
   public record PermDto(String code, String name) {}
 
   public record PermsResponse(List<PermDto> perms) {}
+
+  public record CommandSwitchDto(
+      String commandCode,
+      boolean enabled,
+      java.time.Instant updatedAt,
+      Long updatedByUserId,
+      String note) {}
+
+  public record ListCommandSwitchesResponse(List<CommandSwitchDto> switches) {}
+
+  public record SetEnabledRequest(
+      long actorUserId, String commandCode, boolean enabled, String note) {}
+
+  public record SetEnabledResponse(CommandSwitchDto value) {}
+
+  public record HardDeleteRequest(Long actorUserId, Long targetUserId, String targetLogin) {}
+
+  public record HardDeleteResponse(boolean ok, Long deletedUserId, String deletedLogin) {}
 }

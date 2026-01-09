@@ -1,23 +1,59 @@
-# alerts-service
+﻿# alerts-service
 
-## Назначение
+## Назначение (простыми словами)
 
-Сервис алертов/уведомлений (пока каркас). На шаге 1.3 добавлена межсервисная безопасность: сервис валидирует JWT access token от gateway.
+Это каркас сервиса алертов/уведомлений. Сейчас он нужен как демонстрация того,
+как downstream-сервисы проверяют JWT от gateway и требуют нужные permissions.
 
-- Проверка access token (resource-server) (шаг 1.3)
-- Демонстрация permission-check на заглушке ручки (шаг 1.3)
+Человеческое объяснение: это «учебная площадка» для проверки безопасности.
+Здесь нет реальной бизнес‑логики, но есть все ключевые механики доступа.
 
-## Что есть сейчас
+## Как это работает
 
-- `GET /ping` — открытая проверка доступности
-- `GET /api/alerts/secure-sample` — защищённая ручка
-  - требует `PERM_ALERTS_READ` (шаг 1.3)
+1) Клиент вызывает защищённую ручку.
+2) Spring Security проверяет JWT access token:
+   - подпись (HMAC, общий секрет с gateway),
+   - issuer.
+3) `JwtAuthConverter` превращает claims `roles` и `perms` в authorities:
+   - `ROLE_<role>`
+   - `PERM_<perm>`
+4) Контроллеры используют `@PreAuthorize` для проверки прав.
 
-## Конфигурация
+## Как реализовано (карта кода)
 
-- `JWT_SECRET` должен совпадать с gateway (шаг 1.3)
-- issuer по умолчанию `lsp-api-gateway` (шаг 1.3)
+Если нужно понять механику, достаточно открыть `SecurityConfig` и `SecureDemoController` —
+там видно, как JWT превращается в доступ.
+
+- `security/SecurityConfig` — resource-server конфигурация.
+- `security/JwtAuthConverter` — маппинг claims в authorities.
+- `api/SecureDemoController` — защищённая ручка с `@PreAuthorize`.
+- `api/PingController` — открытый `GET /ping`.
+
+## API
+
+- `GET /ping` — проверка доступности.
+- `GET /api/alerts/secure-sample` — требует `PERM_ALERTS_READ`, возвращает данные из JWT.
+
+## Конфигурация и env
+
+- `JWT_SECRET` — общий секрет с gateway (не менее 32 байт).
+- `JWT_ISSUER` — по умолчанию `lsp-api-gateway`.
+
+Порт по умолчанию: `8082`.
+
+## Локальный запуск
+
+```bash
+mvn -pl services/alerts-service spring-boot:run
+```
+
+Проверка (нужен валидный access token от gateway):
+
+```bash
+curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  http://localhost:8082/api/alerts/secure-sample
+```
 
 ## Ограничения
 
-Права сейчас — заглушки (6 permissions задаются в gateway миграцией). Реальные сценарии алертов будут добавляться позже.
+Бизнес-логики нет, ручки демонстрационные.

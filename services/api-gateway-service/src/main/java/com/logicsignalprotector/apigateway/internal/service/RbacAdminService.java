@@ -93,7 +93,7 @@ public class RbacAdminService {
   public InternalRbacDtos.UsersListResponse listUsers(Long actorUserId) {
     requireManage(actorUserId);
     List<InternalRbacDtos.ShortUserDto> out =
-        users.findAll(org.springframework.data.domain.Sort.by("login")).stream()
+        users.findAll(org.springframework.data.domain.Sort.by("id")).stream()
             .map(u -> new InternalRbacDtos.ShortUserDto(u.getId(), u.getLogin()))
             .collect(Collectors.toList());
     return new InternalRbacDtos.UsersListResponse(out);

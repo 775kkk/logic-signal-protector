@@ -1,101 +1,169 @@
-# api-gateway-service
+﻿# api-gateway-service
 
-## Назначение
+## Назначение (простыми словами)
 
-Gateway в составе микросервисного приложения. Отвечает за:
+Этот сервис — "входные двери" всей системы. Он:
 
-- регистрацию/логин по `login/password`
-- выдачу JWT access token и refresh token
-- RBAC (roles/permissions) и публикацию `perms` в access token
-- хранение и привязку внешних аккаунтов (`external_accounts`) как часть identity
-- внутренние (internal) ручки для сервисов-адаптеров и command-center
+- хранит пользователей, роли и права (RBAC);
+- выдаёт JWT access/refresh токены;
+- связывает пользователя с внешними аккаунтами (Telegram и др.);
+- даёт внутреннее API для command-center и адаптеров;
+- хранит тумблеры команд (command switches) и обслуживает dev-консоль.
 
-- JWT issuance + refresh rotation (шаг 1.2)
-- Flyway migrations + единая воспроизводимая схема БД auth (шаг 1.2)
-- RBAC модель (roles/permissions) и добавление `perms` в access token (шаг 1.3)
-- Внутренние ручки для command-center и адаптеров (шаг 1.3)
+Источник истины по identity находится именно здесь.
 
-## Что реализовано сейчас
+Если говорить совсем по‑человечески: все остальные сервисы верят gateway, потому что только он
+знает, кто вы и какие у вас права. Поэтому любой «вход» в систему начинается здесь, а дальше
+все живут по токену, который выдал gateway.
 
-### Аутентификация
+## Как это работает (ключевые сценарии)
 
-- `POST /api/auth/register` — регистрация (шаг 1.2)
-- `POST /api/auth/login` — логин, выдача access+refresh (шаг 1.2)
-- `POST /api/auth/refresh` — refresh rotation (шаг 1.2)
-- `POST /api/auth/logout` — отзыв refresh токена (шаг 1.2)
+Типичная история выглядит так: пользователь регистрируется или логинится, получает JWT,
+потом любой другой сервис принимает этот токен и по нему понимает, что можно делать.
+Gateway остаётся «админом» по пользователям и правам.
 
-### RBAC (заглушки прав)
+### 1) Регистрация и логин
 
-Схема таблиц:
+1. Клиент вызывает `POST /api/auth/register` с `login/password`.
+2. Gateway:
+   - проверяет rate-limit (Redis),
+   - хеширует пароль,
+   - создаёт пользователя и назначает роль `USER`.
+3. Логин (`/api/auth/login`) проверяет пароль и выдаёт:
+   - `access_token` (JWT, короткий TTL),
+   - `refresh_token` (длинный TTL, хранится в БД в виде хеша).
 
-- `users` / `roles` / `user_roles` (шаг 1.2)
-- `permissions` / `role_permissions` / `user_permission_overrides` (шаг 1.3)
+### 2) Refresh и logout
 
-При выдаче access token gateway кладёт в JWT:
+- `POST /api/auth/refresh` реализует **rotation**: старый refresh отзывается, выдаётся новый.
+- `POST /api/auth/logout` отзывает refresh-токен.
 
-- `roles`: список ролей пользователя
-- `perms`: эффективные permissions (роль + overrides; deny отменяет allow) (шаг 1.3)
-- `uid`: внутренний id пользователя (шаг 1.3)
+### 3) Access token и права
 
-Сейчас заведено **6 заглушек** прав (минимальная демонстрация RBAC):
+- Access token содержит:
+  - `uid` (внутренний id),
+  - `roles`,
+  - `perms` (эффективные права).
+- `PermissionService` считает два набора:
+  - **raw permissions** = роли + overrides (deny отменяет allow),
+  - **effective permissions** = raw + разворачивание `DEVGOD` во все права.
+- В JWT кладётся **effective**, но для чувствительных операций (hard delete)
+  проверяется **raw**.
 
-- `MARKETDATA_READ`
-- `ALERTS_READ`
-- `ALERTS_MANAGE`
-- `BROKER_READ`
-- `BROKER_TRADE`
-- `ADMIN_PANEL`
+### 4) Внешние аккаунты (Telegram и др.)
 
-Маппинг заглушек:
+- Таблица `external_accounts` связывает пользователя и внешний id (provider + external_id).
+- Адаптеры/command-center работают через internal API:
+  - разрешение внешнего id в пользователя (`/internal/identity/resolve`),
+  - логин/регистрация + привязка (`/internal/auth/*`).
 
-- USER: `MARKETDATA_READ`, `ALERTS_READ`, `BROKER_READ`
-- ADMIN: все 6
+### 5) Internal API и защита
 
-### External accounts (Telegram и будущие каналы)
+- Все `/internal/**` защищены заголовком `X-Internal-Token`.
+- `InternalApiAuthFilter` отклоняет запросы без корректного токена.
+- Дальше безопасность делается на уровне сервиса:
+  - `RbacAdminService` проверяет права `actorUserId`,
+  - списки/модификации RBAC доступны только при нужных правах.
 
-Начиная с (шаг 1.3) gateway **не занимается Telegram транспортом** (webhook/polling) и не парсит чат-команды.
+### 6) Dev console и command switches (шаг 1.5)
 
-- Telegram-адаптер вынесен в отдельный сервис: `api-telegram-service` (шаг 1.3)
-- Парсинг команд и оркестрация вынесены в: `logic-commands-center-service` (шаг 1.3)
+- На старте `DevConsoleBootstrapper` выдаёт роль `DEVONLYADMIN` пользователям из env.
+- Таблица `command_switches` хранит включённость команд (переживает рестарт).
+- Internal API:
+  - `GET /internal/commands/list` — список тумблеров (только internal token).
+  - `POST /internal/commands/set-enabled` — включить/выключить (требует прав).
+  - `POST /internal/users/hard-delete` — hard delete (требует **raw** `DEVGOD+USERS_HARD_DELETE`, запрет на удаление себя).
 
-Gateway остаётся источником истины по identity:
+## Как реализовано (карта кода)
 
-- хранит связку `user <-> external_accounts(provider, external_id)`
-- выдаёт access token с `uid`, `roles`, `perms`
+Если вы первый раз в проекте, начните с `AuthController` и `PermissionService` — они дают
+самое понятное представление о логике регистрации/токенов и расчёте прав.
 
-#### Internal API для command-center/адаптеров (шаг 1.3)
+- `auth/api/AuthController` — `/api/auth/*` (register/login/refresh/logout).
+- `auth/service/*`:
+  - `UserService` — регистрация, хеширование пароля,
+  - `TokenService` — выпуск access JWT,
+  - `RefreshTokenService` — refresh rotation (хеш + pepper),
+  - `PermissionService` — raw/effective perms,
+  - `ExternalAccountService` — привязка внешних аккаунтов.
+- `auth/security/*`:
+  - `SecurityConfig`, `JwtAuthConverter`, `InternalApiAuthFilter`.
+- `internal/api/*Controller` — internal endpoints.
+- `internal/service/*`:
+  - `RbacAdminService`, `CommandSwitchService`, `UserHardDeleteService`,
+  - `DevConsoleBootstrapper`.
+- `auth/domain/*` + `auth/repository/*` — JPA сущности и репозитории.
+- Миграции: `src/main/resources/db/migration` (V1–V4).
 
-Все `/internal/**` защищены общим заголовком `X-Internal-Token` (значение берётся из `INTERNAL_API_TOKEN`).
+## API (ручки)
 
-- `POST /internal/identity/resolve`
-  - вход: `{providerCode, externalUserId}`
-  - выход: `{linked, userId, login, roles, perms}`
-- `POST /internal/auth/register-and-link`
-  - вход: `{providerCode, externalUserId, login, password}`
-  - эффект: создаёт пользователя, привязывает внешний аккаунт, выдаёт access token
-- `POST /internal/auth/login-and-link`
-  - вход: `{providerCode, externalUserId, login, password}`
-  - эффект: логинит пользователя, привязывает внешний аккаунт, выдаёт access token
-- `POST /internal/auth/issue-access`
-  - вход: `{providerCode, externalUserId}`
-  - эффект: выдаёт access token для уже привязанного внешнего аккаунта
+### Public
 
-## События и готовность к Kafka
+- `GET /ping` — health check.
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/refresh`
+- `POST /api/auth/logout`
 
-`AuthAuditService` сохраняет события в БД (`auth_events`) и дополнительно вызывает `AuthEventPublisher`.
-Сейчас стоит `NoopAuthEventPublisher` (ничего не публикует), но интерфейс оставлен как точка расширения для Kafka/Rabbit (шаг 1.3).
+### Internal (только X-Internal-Token)
 
-## Как запустить
+- Identity:
+  - `POST /internal/identity/resolve`
+  - `POST /internal/identity/unlink`
+- Auth + link:
+  - `POST /internal/auth/register-and-link`
+  - `POST /internal/auth/login-and-link`
+  - `POST /internal/auth/issue-access`
+- RBAC admin:
+  - `POST /internal/rbac/elevate-by-code`
+  - `POST /internal/rbac/users/get`
+  - `POST /internal/rbac/users/list`
+  - `POST /internal/rbac/roles/list`
+  - `POST /internal/rbac/perms/list`
+  - `POST /internal/rbac/roles/grant`
+  - `POST /internal/rbac/roles/revoke`
+  - `POST /internal/rbac/perms/grant`
+  - `POST /internal/rbac/perms/deny`
+  - `POST /internal/rbac/perms/revoke`
+- Dev console:
+  - `GET /internal/commands/list`
+  - `POST /internal/commands/set-enabled`
+  - `POST /internal/users/hard-delete`
 
-1. Поднять инфраструктуру (Postgres/Redis) из `infra/` (шаг 1.2).
-2. Задать `JWT_SECRET` через env/.env.
-3. Задать `INTERNAL_API_TOKEN` (должен совпадать у gateway и command-center) (шаг 1.3).
-4. Запустить сервис.
+## База данных (основные таблицы)
 
-Примечание: `TELEGRAM_BOT_TOKEN` теперь нужен только в `api-telegram-service` (для Bot API) (шаг 1.3).
+- `users`, `roles`, `user_roles`
+- `permissions`, `role_permissions`, `user_permission_overrides`
+- `external_accounts`, `auth_providers`
+- `refresh_tokens`, `auth_events`
+- `command_switches`
 
-## Ограничения
+## Конфигурация и env
 
-- RBAC: permissions пока заглушки (6 прав), бизнес-операции downstream сервисов демонстрационные.
-- Internal API защищено простым shared-token. Для production уровня понадобятся mTLS/mesh или хотя бы network policies.
+Ключевые переменные:
 
+- `JWT_SECRET` (не менее 32 байт)
+- `JWT_ISSUER` (по умолчанию `lsp-api-gateway`)
+- `INTERNAL_API_TOKEN` (shared token для /internal)
+- `DEV_CONSOLE_ENABLED` / `DEV_CONSOLE_USER_IDS`
+- `DEV_ADMIN_CODE_ENABLED` / `DEV_ADMIN_CODE` (dev backdoor для adminlogin)
+- `REDIS_HOST`, `REDIS_PORT` (rate limit)
+- `SPRING_DATASOURCE_*` (Postgres)
+
+Порт по умолчанию: `8086`.
+
+## Локальный запуск
+
+1) Поднять Postgres/Redis (см. `infra/`).
+2) Задать `.env` / переменные окружения.
+3) Запустить:
+
+```bash
+mvn -pl services/api-gateway-service spring-boot:run
+```
+
+## Ограничения и заметки
+
+- Internal API защищено shared-token (без mTLS).
+- Права пока демонстрационные (минимальный набор).
+- `DEVGOD` разворачивается только в effective permissions; raw используется для критичных операций.

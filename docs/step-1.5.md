@@ -1,403 +1,93 @@
-Ниже — цельное ТЗ на **шаг 1.5**: «Dev Console + тумблеры команд + нормальный /help + подготовка к кнопкам Telegram».
+﻿# Шаг 1.5 — Dev Console, Command Switches, /help по ролям, Telegram UI
+
+## Что сделано
+
+### api-gateway-service
+- Добавлены роли/права DEVONLYADMIN, DEVGOD, COMMANDS_TOGGLE, USERS_HARD_DELETE (Flyway V4).
+- Таблица `command_switches` для тумблеров команд.
+- Internal API:
+  - `GET /internal/commands/list`
+  - `POST /internal/commands/set-enabled`
+  - `POST /internal/users/hard-delete`
+- Bootstrap dev console: выдача роли DEVONLYADMIN по `DEV_CONSOLE_ENABLED` + `DEV_CONSOLE_USER_IDS`.
+- `PermissionService`: raw vs effective perms (DEVGOD разворачивается только в effective).
+- `/internal/rbac/users/list` сортирует по id.
+
+### logic-commands-center-service
+- Единый registry команд + фильтрация для `/help` и `/helpdev`.
+- Проверка command switches (fail-open) + кэш с TTL.
+- Новые команды:
+  - `/helpdev`
+  - `/commands` (список тумблеров)
+  - `/command enable|disable <code>`
+  - `/user delete <login|id>` (с подтверждением)
+- Табличный рендер (`RenderMode.PRE`) для списков.
+- CallbackData поддержка (`cmd:commands:page=N`) + inline keyboard.
+
+### api-telegram-service
+- Обработка `callback_query`.
+- `editMessageText`, `deleteMessage`, `answerCallbackQuery`.
+- Рендер таблиц через `<pre>` + `parse_mode=HTML`.
+- Inline keyboard поддержка.
 
 ---
 
-# ТЗ Шаг 1.5 — Dev Console, Command Registry (тумблеры), Help по ролям, Telegram UI (кнопки), лицензия
+## Новые роли/права
 
-## 0) Контекст и текущая база (что уже есть)
+**Роли**:
+- `DEVONLYADMIN` (bootstrap через env)
 
-**Основано на коде шага 1.4 из репозитория (папка `/mnt/data/lsp_1_4/...`):**
-
-* Telegram вынесен в `api-telegram-service`, gateway не принимает Telegram напрямую (это уже отражено в `api-gateway-service` конфиге).
-* В `api-gateway-service` есть Postgres + Flyway миграции и RBAC таблицы (`roles`, `permissions`, `role_permissions`, `user_roles`, `user_permission_overrides`).
-* В шаге 1.4 уже добавлены:
-
-  * dev-повышение до ADMIN по коду через внутренний endpoint `/internal/rbac/elevate-by-code` (включается `DEV_ADMIN_CODE_ENABLED` / `DEV_ADMIN_CODE`).
-  * perms: `ADMIN_ANSWERS_LOG`, `ADMIN_USERS_PERMS_REVOKE` и привязка к роли ADMIN (миграция V3).
-* В `logic-commands-center-service` БД нет; он ходит во внутренние endpoint’ы gateway по `INTERNAL_API_TOKEN`.
-
-**Почему это важно для 1.5:** всё, что “табличное/справочное и должно переживать рестарт” — проще всего хранить в gateway Postgres через Flyway и выдавать через `/internal/**`. А применять правила — в `logic-commands-center-service` (иначе обход gateway ломает смысл).
+**Permissions**:
+- `DEVGOD`
+- `COMMANDS_TOGGLE`
+- `USERS_HARD_DELETE`
 
 ---
 
-## 1) Цели шага 1.5
+## Команды (кратко)
 
-1. Сделать **консоль-опыт в Telegram**: таблицы как в терминале, списки отсортированы, меньше “мусорных” сообщений, максимум — через редактирование сообщения + inline-кнопки.
-2. Сделать **/help, который зависит от прав**: обычный пользователь **не видит** админские/дев-команды.
-3. Ввести **DEV_CONSOLE_ENABLED** и спец-роль **devonlyadmin** (полный доступ для отладки), которая:
+**Базовые**:
+- `/help`, `/login`, `/register`, `/logout`, `/me`, `/market`, `/alerts`, `/broker`, `/trade`
 
-   * выдаётся **только через конфиг при старте**, а не по коду;
-   * имеет корневую пермиссию **devgod**, которая “снимает границы”.
-4. Ввести **тумблеры команд** (вкл/выкл) с управлением через dev-права (и/или отдельную perms), с хранением состояния так, чтобы переживало рестарт.
-5. Подготовить архитектуру так, чтобы:
+**Admin (RBAC)**:
+- `/users`, `/user <login>`, `/roles`, `/perms`
+- `/grantrole`, `/revokerole`, `/grantperm`, `/denyperm`, `/revokeperm`
 
-   * часть сервисов могла вызывать `logic-commands-center-service` **в обход gateway** (alerts-сценарии),
-   * но безопасность не рушилась (defense-in-depth: проверка на уровне сервиса тоже).
-6. Добавить **LICENSE** в репозиторий и зафиксировать политику.
-
----
-
-## 2) Глоссарий
-
-* **Gateway** = `api-gateway-service` (аутентификация, RBAC, Postgres, Flyway, `/internal/**`).
-* **Logic** = `logic-commands-center-service` (парсер команд, проверки прав, сбор ответов, обращение к другим сервисам, обращение к gateway internal API).
-* **Telegram adapter** = `api-telegram-service` (принимает апдейты Telegram, вызывает logic, отправляет/редактирует сообщения).
+**Dev**:
+- `/helpdev`
+- `/commands`
+- `/command enable|disable <code>`
+- `/user delete <login|id>`
 
 ---
 
-## 3) Требования по Telegram UI: кнопки, редактирование, удаление
+## Спорные решения (зафиксировано)
 
-### 3.1 Inline keyboard как “панель команд”
-
-**Делаем ставку на InlineKeyboardMarkup**, чтобы:
-
-* кнопка не присылала “обычный текст” как сообщение пользователя (в отличие от reply-keyboard),
-* а приходила как `callback_query` (можно отрабатывать как “нажатие в UI”). CallbackQuery содержит `data` (payload) и `message` (какое сообщение редактировать).
-
-**Ограничение:** `callback_data` у inline-кнопок ограничен по размеру (в источниках обычно 1–64 байта) — значит payload должен быть коротким (например `cmd:list_users:page=1`).
-
-### 3.2 Редактирование сообщения вместо спама
-
-Для “консольных” ответов:
-
-* Telegram adapter отправляет 1 “экран” (message),
-* дальше обновляет его через `editMessageText` (и/или `editMessageReplyMarkup`) при навигации кнопками.
-
-### 3.3 Удаление чувствительных сообщений (/login, /register)
-
-* После успешного `login/register` Telegram adapter пытается удалить исходное сообщение пользователя через `deleteMessage` (чтобы пароль не оставался в чате).
-* Учитываем лимиты: удалить можно только в пределах 48 часов и с ограничениями по типам сообщений/правам.
-
-**Важно:** автоматическое удаление “технических” ответов через N секунд — **не делаем** (ты это подтвердил). Удаляем только явно чувствительное (пароли).
+1. LICENSE не добавляем (явное требование владельца).
+2. `/internal/commands/list` — только internal token, без actor/RBAC.
+3. DEVGOD: raw vs effective; hard-delete проверяет RAW (DEVGOD + USERS_HARD_DELETE).
+4. Command switches: fail-open, TTL 5–15 сек.
+5. `toggleable=false` для `/help`, `/helpdev`, `/commands`, `/command`.
+6. Запрет hard delete самого себя.
 
 ---
 
-## 4) “Откуда пришло сообщение” и форматирование ответа
+## Переменные окружения
 
-### 4.1 Зачем метить источник (tg / будущие mini apps / другое)
+**Gateway**:
+- `DEV_CONSOLE_ENABLED`
+- `DEV_CONSOLE_USER_IDS`
 
-**Требование:** logic должен уметь принимать метку источника (`channel=TELEGRAM|WEBAPP|...`) как часть входного DTO.
-
-**Но**: logic **не генерирует HTML под Telegram** (не превращаем его в “верстальщик”). Его задача — вернуть **универсальный** результат, который адаптер отрендерит “как умеет”.
-
-### 4.2 Контракт ответа (универсальный)
-
-Вводим модель результата (концепт, не обязательно 1:1 классами):
-
-* `textBlocks[]` — обычный текст
-* `tableBlocks[]` — таблица (колонки + строки, типы)
-* `uiHints`:
-
-  * `inlineKeyboard` (кнопки/страницы)
-  * `preferEdit=true` (адаптеру лучше редактировать прошлое сообщение)
-  * `parseModeHint=HTML` (для `<pre>...</pre>`)
-
-**Default-рендер** (если адаптер “тупой”): таблицы в ASCII как терминал.
+**Logic**:
+- `DEV_CONSOLE_ENABLED`
+- `COMMAND_SWITCH_CACHE_TTL` (например `PT10S`)
+- `CHAT_HARD_DELETE_CONFIRM_TTL` (например `PT60S`)
 
 ---
 
-## 5) Табличный вывод “как в терминале”
-
-### 5.1 Правило рендера
-
-* Таблицы рендерятся моноширинно, в рамке или хотя бы выровнено пробелами.
-* Для Telegram лучше отправлять это как `<pre>...</pre>` (HTML parse_mode) — чтобы не ломалось выравнивание.
-
-### 5.2 Сортировки “как ожидается”
-
-* `users/list` — сортировка по `id` (а не по login), как ты хочешь.
-* Любые “списки сущностей” — **сортировать детерминированно** (id/code).
-
----
-
-## 6) /help и алиасы команд
-
-### 6.1 Алиасы
-
-Для каждой команды поддерживаем варианты:
-
-* `/login`, `login`, `логин`
-* `/help`, `help`, `хелп`  (**“помощь” больше не делаем как основной алиас** — можно оставить как доп. алиас только если хочешь)
-
-### 6.2 Help по правам (обязательно)
-
-`/help` показывает **только** команды, которые:
-
-1. доступны в текущем режиме (`DEV_CONSOLE_ENABLED` влияет на dev-команды),
-2. включены тумблером (см. раздел 8),
-3. разрешены по RBAC (пользователь имеет нужную permission).
-
-Пользователь без админских прав **не видит** админских команд.
-
----
-
-## 7) DEV-контур: devonlyadmin + devgod + /helpdev
-
-### 7.1 Переменные окружения
-
-* `DEV_CONSOLE_ENABLED=true|false`
-* `DEV_CONSOLE_USER_IDS=1,2,3`  *(ID внутренних user’ов в gateway DB; именно так ты описал “привязано к аккаунту”)*
-
-### 7.2 RBAC сущности
-
-Добавляем:
-
-* роль: `DEVONLYADMIN`
-* permission: `DEVGOD` (корневая)
-
-**Смысл DEVGOD:**
-
-* “если есть DEVGOD → разрешено всё” (и команды, и таблицы, и управление тумблерами, и destructive-операции).
-* Технически это лучше сделать **в PermissionService** как “супер-флаг”: если у пользователя есть `DEVGOD`, effective permissions = все permissions из таблицы `permissions` (плюс любые будущие автоматически).
-  Иначе придётся каждый раз вручную маппить новые perms в роль.
-
-### 7.3 Как выдаётся devonlyadmin
-
-**Только при старте приложения**, если `DEV_CONSOLE_ENABLED=true`:
-
-* gateway читает `DEV_CONSOLE_USER_IDS`,
-* для этих user_id гарантирует роль `DEVONLYADMIN` (upsert в `user_roles`).
-
-Это удовлетворяет требованию “нельзя получить по коду”.
-
-### 7.4 /helpdev
-
-* Доступен только пользователям с `DEVGOD` (или ролью devonlyadmin, которая несёт DEVGOD).
-* Содержит dev-команды (ниже).
-
----
-
-## 8) “Тумблеры команд” (вкл/выкл)
-
-### 8.1 Где хранить
-
-**Решение для 1.5:** хранить состояние тумблеров в **gateway Postgres** (Flyway), потому что:
-
-* переживает рестарт,
-* не требует заводить БД для logic,
-* logic всё равно ходит в gateway `/internal/**`,
-* и даже если какой-то сервис обходит gateway, он всё равно вызывает **logic**, а logic проверит тумблер.
-
-> Это как раз “гибко”: gateway не становится единственной точкой контроля исполнения, он просто хранилище/админ-панель, а enforcement — в logic.
-
-### 8.2 Таблица
-
-`command_switches`:
-
-* `command_code` (PK)
-* `enabled` boolean default true
-* `updated_at`
-* `updated_by_user_id` (nullable)
-* `note` (nullable)
-
-### 8.3 Управление через perms
-
-Добавляем permission:
-
-* `COMMANDS_TOGGLE` (или `DEV_COMMANDS_TOGGLE` — нейминг на твоё усмотрение)
-
-Правило:
-
-* включать/выключать команды может:
-
-  * пользователь с `DEVGOD`, **или**
-  * пользователь с `COMMANDS_TOGGLE`.
-
-(Ты предлагал “тумблер через специальную perms” — это оно.)
-
-### 8.4 Как применяется
-
-* logic перед выполнением команды делает:
-
-  1. `isCommandEnabled(command_code)`
-  2. `isPermitted(user, command_perm)`
-  3. если ок → выполняет
-* caching: logic может кэшировать `command_switches` на короткий TTL (например 10–30 секунд), чтобы не долбить gateway.
-
----
-
-## 9) Dev-команды (терминал-режим)
-
-> Это “минимальный полезный набор” под твой сценарий «как будто консоль на сервере с телефона».
-
-### 9.1 Команды управления командами
-
-* `/commands` — список команд + enabled + required perm
-* `/command enable <code>`
-* `/command disable <code>`
-
-### 9.2 Команды RBAC/пользователи (расширяем то, что уже есть в 1.4)
-
-(В 1.4 уже существуют internal endpoints на listUsers/listRoles/listPerms/grant/revoke/overrides.)
-
-* `/users` — таблица пользователей (id, login) сорт по id
-* `/user <login>` — детали (roles, perms, overrides)
-* `/roles`, `/perms` — списки
-* `/grantrole <login> <role>`
-* `/revokerole <login> <role>`
-* `/grantperm <login> <perm> [reason] [expiresAt]`
-* `/denyperm ...`
-* `/revokeperm ...`
-
-### 9.3 Hard delete пользователя (то, что ты просил)
-
-Добавляем permission:
-
-* `USERS_HARD_DELETE`
-
-Команда:
-
-* `/user delete <login>` (или `<id>`)
-  Требования для выполнения:
-* `DEVGOD` **и** `USERS_HARD_DELETE`
-* плюс подтверждение (двухшагово через состояние чата на 30–60 секунд: “подтверди DELETE <login>”).
-
----
-
-## 10) Вопрос “почему не хранить роли/активность команд только в gateway?”
-
-Твой аргумент про обход gateway — правильный.
-
-**Правило безопасности/архитектуры для 1.5:**
-
-* На gateway можно делать **грубую** проверку (edge-level), но она не заменяет service-level.
-  OWASP прямо пишет, что авторизация только на API-gateway имеет ограничения и для защиты от обхода нужны mitigating controls (например mTLS) и/или service-level authorization (defense in depth).
-* Значит даже если gateway хранит “справочник” (roles, command_switches), исполняющий сервис (logic) **обязан** сам проверять права и состояние команд.
-
-И это решает твою проблему:
-
-* alerts-service может вызвать logic напрямую → logic всё равно проверит RBAC/тумблеры.
-* gateway не становится “узким горлышком логики”, он остаётся auth/policy/data-слоем.
-
----
-
-## 11) Stateless — что это и почему “таблица справочник” не ломает идею
-
-**Stateless в нашем контексте:** сервис не хранит “сессию пользователя в памяти так, что другой инстанс не сможет продолжить”.
-
-* Наличие БД/таблиц **не делает сервис stateful в плохом смысле**. Наоборот: DB — нормальный способ хранить состояние, общее для всех инстансов.
-* Что делает stateful “плохо”: хранить критичное состояние выполнения в памяти без возможности восстановить/шарить.
-
-В нашем 1.5:
-
-* chat state (подтверждения/шаги) можно держать как сейчас (TTL), это нормально.
-* command_switches лучше держать в DB (gateway), это нормально и даже правильнее.
-
----
-
-## 12) Mini Apps (пока не делаем) — но готовим “правильные швы”
-
-Mini Apps — это HTML5 web app внутри Telegram. Это другой UX-слой, не “сообщение-команда”.
-
-**Решение 1.5:** никаких mini apps не реализуем, но:
-
-* сохраняем `channel` в запросе к logic,
-* делаем универсальный формат ответа (blocks/uiHints),
-* Telegram-адаптер рендерит под Telegram,
-* future webapp-адаптер будет рендерить под web (HTML/JSON).
-
----
-
-## 13) План реализации (по сервисам)
-
-### 13.1 api-gateway-service
-
-1. Flyway V4:
-
-   * добавить `DEVONLYADMIN` role
-   * добавить `DEVGOD` permission
-   * добавить `COMMANDS_TOGGLE`, `USERS_HARD_DELETE` (и при желании `DEV_TABLE_USERS_READ/WRITE`)
-   * добавить таблицу `command_switches`
-2. Boot-инициализация devonlyadmin по `DEV_CONSOLE_ENABLED` + `DEV_CONSOLE_USER_IDS`
-3. Internal endpoints:
-
-   * `/internal/commands/list`
-   * `/internal/commands/set-enabled`
-   * `/internal/users/hard-delete` (под DEVGOD+USERS_HARD_DELETE, с аудитом)
-
-### 13.2 logic-commands-center-service
-
-1. Единый registry команд:
-
-   * code, description, aliases, requiredPerm, devOnly, supportsButtons
-2. /help и /helpdev:
-
-   * фильтрация по enabled/perms/devflag
-3. Табличный renderer (ASCII) + uiHints
-4. Команды управления тумблерами + dev-команды пользователей
-5. Проверки:
-
-   * RBAC для пользователя (через gateway internal identity/rbac)
-   * command enabled (через gateway internal commands)
-
-### 13.3 api-telegram-service
-
-1. Inline keyboard обработка:
-
-   * принимать `callback_query`, вызывать logic с `messageId` и `callbackData`
-   * обновлять сообщение через `editMessageText`
-2. Удаление сообщений с паролями:
-
-   * на успешном login/register вызвать `deleteMessage` на исходное сообщение пользователя (если возможно)
-3. Parse mode HTML + `<pre>` для таблиц.
-
----
-
-## 14) Проверка работоспособности (acceptance criteria)
-
-1. **Обычный USER**:
-
-   * `/help` не показывает admin/dev команд
-   * не может выполнить `/users`, `/roles`, `/command disable ...`
-2. **ADMIN** (без devgod):
-
-   * видит админ-команды, но не видит `/helpdev` (если так решим)
-3. **DEVONLYADMIN (devgod)**:
-
-   * видит `/helpdev`
-   * может выключить команду и после рестарта состояние сохраняется
-   * может сделать hard delete пользователя только после подтверждения
-4. Telegram UI:
-
-   * кнопки навигации работают через callback_query
-   * таблицы выглядят как терминал
-   * парольные сообщения удаляются (если Telegram позволяет в данном чате/времени)
-
----
-
-## 15) Оценка сложности именно для нашего проекта (по факту текущей базы)
-
-**Основано на текущем состоянии сервисов 1.4, который я вижу в коде:**
-
-* Миграции + пара таблиц + internal endpoints в gateway: **средняя** (структура уже есть, RBAC уже есть).
-* Registry команд + help-фильтрация + table renderer в logic: **средняя** (это в основном прикладной код без “страшных” интеграций).
-* Inline keyboard + editMessageText в telegram service: **средняя** (Telegram API это поддерживает напрямую; главное — аккуратный state/message_id).
-* Самое “тонкое”: корректно продумать **security при обходе gateway** (но у нас уже есть internal token и RBAC в gateway; добавляем service-level checks — это правильный путь).
-
----
-
----
-
-## 17) Документация (обязательная часть шага 1.5)
-
-Цель: чтобы новый разработчик мог **прочитать 1 раз и понять**, не «рыскать по коду».
-
-Требования:
-
-1) В корне репозитория должен быть `README.md`:
-   - карта сервисов и их роли;
-   - типовые потоки запросов (Telegram → adapter → logic → gateway → downstream);
-   - как запустить локально (минимально работоспособный сценарий);
-   - где лежит подробная документация.
-
-2) В каждом сервисе `services/<service>/README.md`:
-   - назначение сервиса;
-   - границы ответственности (что делает, что **не** делает);
-   - конфигурация (env vars / application.yml важные значения);
-   - внешние API (если есть) и internal контракты;
-   - основные сценарии/потоки (sequence в тексте);
-   - где в коде ключевые точки расширения.
-
-3) Привести в порядок `.md` в `docs/`:
-   - удалить «пустые» шаблоны/черновики;
-   - сохранить документы шагов как `docs/step-X.Y.md`.
+## Telegram UI
+
+- Inline keyboard через `callback_query`.
+- Pagination для `/commands`.
+- Prefer edit: ответы могут редактировать предыдущее сообщение.
+- Парольные сообщения удаляются после успешного login/register.

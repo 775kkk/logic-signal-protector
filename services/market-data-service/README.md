@@ -1,24 +1,55 @@
-# market-data-service
+﻿# market-data-service
 
-## Назначение
+## Назначение (простыми словами)
 
-Сервис рыночных данных (пока каркас). В шаге 1.3 добавлена валидация JWT access token, чтобы сервисы умели проверять токен, выданный gateway.
+Каркас сервиса рыночных данных. Сейчас он нужен, чтобы показать,
+как downstream-сервисы проверяют JWT и permission от gateway.
 
-- Проверка access token (Spring Security resource-server) (шаг 1.3)
-- Демонстрация permission-check на заглушке ручки (шаг 1.3)
+Проще говоря, это демонстрационный сервис‑макет: он показывает,
+как будет выглядеть защищённый доступ к данным, когда появится реальная логика.
 
-## Что есть сейчас
+## Как это работает
 
-- `GET /ping` — открытая проверка доступности (шаг 1.2/1.3)
-- `GET /api/market-data/secure-sample` — защищённая ручка
-  - требует `PERM_MARKETDATA_READ` (шаг 1.3)
-  - возвращает claims из JWT для наглядности
+1) Клиент вызывает защищённую ручку.
+2) Spring Security валидирует JWT access token (подпись + issuer).
+3) `JwtAuthConverter` превращает claims `roles`/`perms` в authorities.
+4) `@PreAuthorize("hasAuthority('PERM_MARKETDATA_READ')")` блокирует доступ без права.
 
-## Конфигурация
+## Как реализовано (карта кода)
 
-- `security.jwt.secret` берётся из `JWT_SECRET` (должен совпадать с gateway) (шаг 1.3)
-- `security.jwt.issuer` по умолчанию `lsp-api-gateway` (шаг 1.3)
+Самое полезное место для чтения — `SecurityConfig` и `SecureDemoController`:
+там видно, как JWT проверяется и как вешаются права.
+
+- `security/SecurityConfig` — resource-server конфигурация.
+- `security/JwtAuthConverter` — маппинг claims в authorities.
+- `api/SecureDemoController` — защищённая ручка.
+- `api/PingController` — открытый `GET /ping`.
+
+## API
+
+- `GET /ping` — проверка доступности.
+- `GET /api/market-data/secure-sample` — требует `PERM_MARKETDATA_READ`, возвращает claims из JWT.
+
+## Конфигурация и env
+
+- `JWT_SECRET` — общий секрет с gateway (не менее 32 байт).
+- `JWT_ISSUER` — по умолчанию `lsp-api-gateway`.
+
+Порт по умолчанию: `8081`.
+
+## Локальный запуск
+
+```bash
+mvn -pl services/market-data-service spring-boot:run
+```
+
+Проверка (нужен валидный access token от gateway):
+
+```bash
+curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  http://localhost:8081/api/market-data/secure-sample
+```
 
 ## Ограничения
 
-Это пока демонстрационный каркас: реальная бизнес-логика/контракты будут добавляться позже.
+Это демонстрационный каркас без реальной бизнес-логики.

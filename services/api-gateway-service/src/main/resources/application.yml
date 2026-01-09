@@ -97,3 +97,6 @@ dev:
   admin-code:
     enabled: ${DEV_ADMIN_CODE_ENABLED:false}
     value: ${DEV_ADMIN_CODE:}
+  console:
+    enabled: ${DEV_CONSOLE_ENABLED:false}
+    user-ids: ${DEV_CONSOLE_USER_IDS:}

@@ -37,7 +37,8 @@ public class DevTelegramController {
             String.valueOf(req.telegramUserId()),
             String.valueOf(req.chatId()),
             null,
-            req.text());
+            req.text(),
+            null);
     return commandCenter.send(env);
   }
 }

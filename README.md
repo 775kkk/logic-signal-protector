@@ -24,7 +24,7 @@
    - запрашивает identity/права в `api-gateway-service` через `/internal/**`
    - вызывает бизнес-сервисы
    - формирует `ChatResponse`
-5. `api-telegram-service` отправляет пользователю сообщения (сейчас: `sendMessage`).
+5. `api-telegram-service` отправляет пользователю сообщения (поддерживает `editMessageText`, inline-кнопки, `deleteMessage`).
 
 ## 3) Быстрый старт локально
 
@@ -34,6 +34,7 @@
    - `JWT_SECRET`
    - `INTERNAL_API_TOKEN` (одинаковый для gateway и logic)
    - `TELEGRAM_BOT_TOKEN` (для telegram-service)
+   - `DEV_CONSOLE_ENABLED` / `DEV_CONSOLE_USER_IDS` (dev console, шаг 1.5)
 2) Поднять инфраструктуру из `infra/` (Postgres/Redis).
 3) Запустить сервисы:
    - gateway: `services/api-gateway-service` (порт по умолчанию 8086)
@@ -45,8 +46,10 @@
 ## 4) Документация
 
 - `docs/step-*.md` — дневник проекта по шагам (что было сделано и почему).
+- `docs/tz-step-*.md` — технические задания по шагам.
 - `services/*/README.md` — подробная документация по каждому сервису.
 - `internal_docs/assistant_notes/*` — рабочие заметки (хронология + карта реализации).
+- `для себя/*` — внутренние заметки реализации (Step 1.5).
 
 ## 5) Лицензия
 

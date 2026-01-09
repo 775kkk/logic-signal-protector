@@ -19,10 +19,18 @@ import org.springframework.stereotype.Service;
 public class PermissionService {
 
   private final JdbcTemplate jdbc;
+  private static final String PERM_DEVGOD = "DEVGOD";
 
   public Set<String> getEffectivePermissionCodes(long userId) {
-    Set<String> effective = new HashSet<>(loadRolePermissions(userId));
+    Set<String> raw = getRawPermissionCodes(userId);
+    if (raw.contains(PERM_DEVGOD)) {
+      return Collections.unmodifiableSet(new HashSet<>(loadAllPermissionCodes()));
+    }
+    return Collections.unmodifiableSet(raw);
+  }
 
+  public Set<String> getRawPermissionCodes(long userId) {
+    Set<String> effective = new HashSet<>(loadRolePermissions(userId));
     Map<String, Boolean> overrides = loadActiveOverrides(userId);
     for (Map.Entry<String, Boolean> e : overrides.entrySet()) {
       String code = e.getKey();
@@ -35,6 +43,11 @@ public class PermissionService {
     }
 
     return Collections.unmodifiableSet(effective);
+  }
+
+  private List<String> loadAllPermissionCodes() {
+    String sql = "SELECT code FROM permissions ORDER BY code";
+    return jdbc.query(sql, (rs, rowNum) -> rs.getString(1));
   }
 
   private List<String> loadRolePermissions(long userId) {

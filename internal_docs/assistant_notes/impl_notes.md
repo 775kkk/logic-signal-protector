@@ -1,47 +1,123 @@
-# Implementation notes (assistant)
+﻿# Implementation notes (assistant)
 
 Эти заметки — «карта проекта» для разработчика: где что лежит и как быстро найти нужную точку расширения.
+Цель — чтобы можно было разобраться без чтения всего кода.
 
-## 1) Общая архитектура (текущая, шаг 1.4)
+## 1) Общая архитектура (шаг 1.5)
 
-**Поток Telegram-команды (транспорт = Telegram message):**
+**Основной поток Telegram-команды:**
 
-1. Telegram → `api-telegram-service` (`POST /telegram/webhook`)
-2. `api-telegram-service` извлекает `{provider=telegram, externalUserId, chatId, messageId, text}`
-3. `api-telegram-service` вызывает `logic-commands-center-service` (HTTP)
+1. Telegram → `api-telegram-service` (`/telegram/webhook` или polling).
+2. `api-telegram-service` извлекает `{channel=telegram, externalUserId, chatId, messageId, text|callbackData}`.
+3. `api-telegram-service` вызывает `logic-commands-center-service` (HTTP).
 4. `logic-commands-center-service`:
-   - парсит команду и алиасы
-   - при необходимости запрашивает identity/права через internal API gateway
-   - вызывает бизнес-сервисы (market-data/alerts/virtual-broker)
-   - формирует `ChatResponse` (список сообщений)
-5. `api-telegram-service` отправляет ответы пользователю через Bot API (сейчас: только `sendMessage`).
+   - парсит команду,
+   - запрашивает identity/права в `api-gateway-service`,
+   - проверяет тумблеры команд,
+   - вызывает downstream-сервисы,
+   - формирует `ChatResponse`.
+5. `api-telegram-service` отправляет ответы (send/edit/delete + inline keyboard + PRE).
 
-**Identity и RBAC — источник истины:** `api-gateway-service` (Postgres + Flyway).
+**Источник истины по пользователям и правам:** `api-gateway-service` (Postgres + Flyway).
 
-## 2) Internal API gateway (для адаптеров и command-center)
+## 2) Контракты между сервисами
 
-Все ручки `/internal/**` защищены shared token:
-- HTTP header: `X-Internal-Token: <INTERNAL_API_TOKEN>`
-- Значение задаётся в env и должно совпадать у клиентов.
+### 2.1 ChatMessageEnvelope (logic input)
 
-Ключевые эндпойнты:
-- `/internal/identity/resolve` — найти внутреннего пользователя по внешнему аккаунту.
-- `/internal/auth/register-and-link` — регистрация + привязка внешнего аккаунта.
-- `/internal/auth/login-and-link` — логин + привязка внешнего аккаунта.
-- `/internal/auth/issue-access` — выдача access token по уже привязанному внешнему аккаунту.
-- `/internal/identity/unlink` — отвязка внешнего аккаунта (шаг 1.4, logout семантика).
+Поля:
+- `channel` — имя канала (`telegram`).
+- `externalUserId` — ID пользователя в канале.
+- `chatId` — ID чата.
+- `messageId` — ID сообщения (нужен для edit/delete).
+- `text` — текст команды.
+- `callbackData` — данные кнопки (inline keyboard).
 
-## 3) Где добавлять новые команды
+`callbackData` имеет приоритет над `text`. Формат кнопок: `cmd:<command>:<arg>`.
+Пример: `cmd:commands:page=2`.
 
-- Парсер/роутинг команд: `logic-commands-center-service`.
-- Если команда требует права:
-  - права объявляются в gateway (Flyway: `permissions`, `roles`, ...)
-  - `logic` проверяет `perms` (эффективные) перед выполнением.
+### 2.2 ChatResponse (logic output)
 
-## 4) Документация
+`ChatResponse.messages[]` содержит `OutgoingMessage` с `uiHints`:
+- `preferEdit` — редактировать сообщение, если возможно.
+- `deleteSourceMessage` — удалить исходное сообщение пользователя.
+- `renderMode=PRE` — рисовать моноширинную таблицу (`<pre>` в Telegram).
+- `inlineKeyboard` — набор кнопок.
 
-Правило проекта: документация должна отвечать на «что делает» и «как именно реализовано», без чтения кода.
+## 3) api-gateway-service (identity, RBAC, dev console)
 
-- `docs/step-*.md` — дневник по шагам.
-- `services/*/README.md` — подробная документация по каждому сервису.
-- `internal_docs/assistant_notes/*` — рабочие заметки.
+### Где смотреть реализацию
+
+- Auth API: `auth/api/AuthController`.
+- Auth core: `auth/service/*` (`UserService`, `TokenService`, `RefreshTokenService`, `PermissionService`).
+- Security: `auth/security/*` (`SecurityConfig`, `JwtAuthConverter`, `InternalApiAuthFilter`).
+- Internal API: `internal/api/*Controller`.
+- Dev console: `internal/service/DevConsoleBootstrapper`, `CommandSwitchService`, `UserHardDeleteService`.
+
+### Важные решения
+
+- **Raw vs Effective permissions**:
+  - raw = роли + overrides (deny отменяет allow),
+  - effective = raw + разворачивание `DEVGOD` во все права.
+- Для **hard delete** проверяются **raw** `DEVGOD + USERS_HARD_DELETE`.
+- `/internal/commands/list` доступен только по internal token (без actor/perms) — нужно для logic.
+
+### База и миграции
+
+Миграции лежат в `services/api-gateway-service/src/main/resources/db/migration`.
+V4 добавляет `command_switches` и новые permissions.
+
+## 4) logic-commands-center-service (обработка команд)
+
+### Ключевые точки кода
+
+- `domain/ChatCommandHandler` — основной обработчик.
+- `domain/CommandRegistry` — декларативный список команд (код, права, toggleable).
+- `domain/CommandSwitchCache` — TTL-кеш тумблеров (fail-open при сбое).
+- `domain/ChatStateStore` — in-memory state (login/register/logout/hard delete).
+- `client/GatewayInternalClient` — вызовы internal API gateway.
+- `client/DownstreamClients` — вызовы market/alerts/broker.
+
+### Логика команд
+
+- `/help` и `/helpdev` формируются из `CommandRegistry` + фильтр по правам и тумблерам.
+- `/commands` показывает все команды с состоянием тумблера и делает пагинацию через inline keyboard.
+- `/command enable|disable` вызывает gateway `internal/commands/set-enabled`.
+- `/user delete` требует подтверждение `DELETE <login|id>` (TTL), затем вызывает gateway hard-delete.
+- `/login` и `/register` могут запрашивать логин/пароль отдельным сообщением;
+  после успеха выставляется `deleteSourceMessage=true` (чтобы удалить пароль).
+
+### Состояния чата (ChatState)
+
+- `AWAIT_LOGIN_CREDENTIALS`
+- `AWAIT_REGISTER_CREDENTIALS`
+- `AWAIT_LOGOUT_CONFIRM`
+- `AWAIT_USER_HARD_DELETE_CONFIRM`
+
+Ключ состояния: `channel|externalUserId|chatId`.
+
+## 5) api-telegram-service (адаптер Telegram)
+
+### Основные классы
+
+- `TelegramWebhookController` — обработка webhook и callback_query.
+- `TelegramPollingRunner` — long-polling режим.
+- `TelegramBotClient` — низкоуровневый клиент Bot API.
+
+### Что важно
+
+- `preferEdit=true` → `editMessageText` вместо `sendMessage`.
+- `renderMode=PRE` → текст экранируется и оборачивается в `<pre>`.
+- `inlineKeyboard` → преобразуется в Telegram `inline_keyboard`.
+- `deleteSourceMessage=true` → удаляется сообщение пользователя.
+
+## 6) Downstream-сервисы (market/alerts/broker)
+
+- Все используют Spring Security resource-server.
+- `JwtAuthConverter` маппит claims `roles`/`perms` в `ROLE_*/PERM_*`.
+- Ручки защищены через `@PreAuthorize`.
+
+## 7) Где расширять систему
+
+- Новая команда: `CommandRegistry` + реализация в `ChatCommandHandler`.
+- Новое permission: миграция в gateway + логика в `PermissionService`.
+- Новый канал (адаптер): отдельный сервис, формирующий `ChatMessageEnvelope`.
