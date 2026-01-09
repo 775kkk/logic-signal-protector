@@ -84,7 +84,9 @@
 - `/login <login> <password>` — логин + привязка.
 - `/logout` — отвязка (с подтверждением).
 - `/me` — статус привязки.
-- `/market` — demo вызов market-data (нужен `MARKETDATA_READ`).
+- `/market <subcommand>` - доступ к рыночным данным (нужен `MARKETDATA_READ`).
+  - `instruments`, `quote`, `candles`, `orderbook`, `trades` (см. `/market help`).
+  - пример: `/market quote SBER` или `/market candles SBER interval=60 from=2024-01-01 till=2024-01-31`.
 - `/alerts` — demo вызов alerts (нужен `ALERTS_READ`).
 - `/broker` — demo вызов broker (нужен `BROKER_READ`).
 - `/trade` — demo trade (нужен `BROKER_TRADE`).

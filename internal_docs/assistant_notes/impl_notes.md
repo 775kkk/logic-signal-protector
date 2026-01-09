@@ -85,6 +85,8 @@ V4 добавляет `command_switches` и новые permissions.
 - `/user delete` требует подтверждение `DELETE <login|id>` (TTL), затем вызывает gateway hard-delete.
 - `/login` и `/register` могут запрашивать логин/пароль отдельным сообщением;
   после успеха выставляется `deleteSourceMessage=true` (чтобы удалить пароль).
+- `/market` — вход в рыночные данные через подкоманды (`instruments`, `quote`, `candles`, `orderbook`, `trades`);
+  параметры передаются в виде `key=value` (см. `/market help`).
 
 ### Состояния чата (ChatState)
 
@@ -116,7 +118,15 @@ V4 добавляет `command_switches` и новые permissions.
 - `JwtAuthConverter` маппит claims `roles`/`perms` в `ROLE_*/PERM_*`.
 - Ручки защищены через `@PreAuthorize`.
 
-## 7) Где расширять систему
+## 7) market-data-service (шаг 1.6)
+
+- REST API: `/api/market/v1/**` (instruments, quotes, candles, orderbook, trades).
+- Сервис сам валидирует JWT (resource-server); `PERM_MARKETDATA_READ` обязателен.
+- `api-gateway` не проксирует market-data в шаге 1.6, клиенты ходят напрямую.
+- Use-case слой: `MarketDataUseCase`, HTTP-адаптеры в `api/*Controller`.
+- Интеграция с MOEX ISS: `client/MoexClient` + Caffeine cache TTL.
+
+## 8) Где расширять систему
 
 - Новая команда: `CommandRegistry` + реализация в `ChatCommandHandler`.
 - Новое permission: миграция в gateway + логика в `PermissionService`.

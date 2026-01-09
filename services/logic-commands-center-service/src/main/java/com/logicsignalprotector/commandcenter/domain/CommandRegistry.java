@@ -68,7 +68,7 @@ public class CommandRegistry {
             new CommandDef(
                 "market",
                 "/market",
-                "demo: market-data",
+                "market: instruments/quote/candles/orderbook/trades",
                 false,
                 true,
                 true,

@@ -25,3 +25,9 @@ security:
   jwt:
     secret: ${JWT_SECRET:dev-only-change-me-dev-only-change-me}
     issuer: ${JWT_ISSUER:lsp-api-gateway}
+
+market:
+  moex:
+    base-url: ${MOEX_BASE_URL:https://iss.moex.com/iss}
+    timeout: ${MOEX_TIMEOUT:5s}
+    cache-ttl: ${MOEX_CACHE_TTL:30s}

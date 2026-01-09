@@ -10,7 +10,7 @@
 - `services/api-gateway-service` — источник истины по identity: пользователи, привязки внешних аккаунтов, JWT (access+refresh), RBAC (roles/permissions), internal API.
 - `services/api-telegram-service` — адаптер Telegram Bot API: принимает webhook/polling updates и передаёт «сырое сообщение» в command-center.
 - `services/logic-commands-center-service` — командный центр: парсит команды, проверяет права, оркеструет вызовы сервисов, формирует ответ.
-- `services/market-data-service` — заглушка доменного сервиса рыночных данных (пока демонстрация inter-service security).
+- `services/market-data-service` — доменный сервис рыночных данных (MOEX ISS) с REST API `/api/market/v1/**`.
 - `services/alerts-service` — заглушка сервиса алертов/уведомлений.
 - `services/virtual-broker-service` — заглушка «виртуального брокера».
 

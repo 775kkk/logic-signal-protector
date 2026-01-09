@@ -39,6 +39,26 @@
 - Команды управления (`/help`, `/helpdev`, `/commands`, `/command`) — `toggleable=false`.
 - Hard delete самого себя запрещён.
 
+## 2026-01-10
+
+### Что сделано (шаг 1.6)
+
+- Market Data:
+  - добавлена интеграция с MOEX ISS (WebClient + Caffeine cache);
+  - реализован слой use-case и REST API `/api/market/v1/**`;
+  - включены валидации параметров и RBAC (`PERM_MARKETDATA_READ`).
+- Logic:
+  - `/market` переведён на подкоманды (`instruments`, `quote`, `candles`, `orderbook`, `trades`) и вызывает реальные эндпоинты market-data.
+- Документация:
+  - обновлены README (root + market-data + logic);
+  - обновлён ТЗ шага 1.6 (про прямой доступ и отсутствие proxy в gateway);
+  - обновлены internal notes.
+
+### Принятые решения (зафиксированы в документации)
+
+- API market-data в шаге 1.6 не проксируется через gateway; клиенты ходят напрямую с access token.
+- `MARKETDATA_ADMIN` не вводим до появления админ-ручек.
+
 ### Где искать
 
 - Код: `services/api-gateway-service`, `services/logic-commands-center-service`, `services/api-telegram-service`.

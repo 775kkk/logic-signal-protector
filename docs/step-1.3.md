@@ -39,7 +39,7 @@
 - в `market-data-service`, `alerts-service`, `virtual-broker-service` добавлен Spring Security resource-server (шаг 1.3);
 - реализован конвертер `JwtAuthConverter`: claims `roles`/`perms` → authorities `ROLE_*` / `PERM_*` (шаг 1.3);
 - добавлены демонстрационные защищённые ручки:
-  - Market Data: `GET /api/market-data/secure-sample` (требует `PERM_MARKETDATA_READ`)
+  - Market Data: `GET /api/market-data/secure-sample` (требует `PERM_MARKETDATA_READ`, в шаге 1.6 заменено на `/api/market/v1/**`)
   - Alerts: `GET /api/alerts/secure-sample` (требует `PERM_ALERTS_READ`)
   - Virtual Broker: `GET /api/broker/secure-sample` (требует `PERM_BROKER_READ`), `POST /api/broker/trade-sample` (требует `PERM_BROKER_TRADE`)
 

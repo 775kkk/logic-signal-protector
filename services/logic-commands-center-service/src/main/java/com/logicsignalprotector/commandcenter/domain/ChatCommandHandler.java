@@ -7,6 +7,7 @@ import com.logicsignalprotector.commandcenter.api.dto.OutgoingMessage;
 import com.logicsignalprotector.commandcenter.client.DownstreamClients;
 import com.logicsignalprotector.commandcenter.client.GatewayInternalClient;
 import com.logicsignalprotector.commandcenter.domain.CommandRegistry.CommandDef;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -51,6 +52,7 @@ public class ChatCommandHandler {
   private final boolean devConsoleEnabled;
 
   private final Map<String, String> aliases = buildAliases();
+  private final TextTable textTable = new TextTable();
 
   public ChatCommandHandler(
       GatewayInternalClient gateway,
@@ -139,7 +141,7 @@ public class ChatCommandHandler {
       case "/register" -> handleRegisterCommand(env, key, p);
       case "/logout" -> handleLogoutRequest(env, key, p);
       case "/me" -> doMe(env);
-      case "/market" -> doProtectedCall(env, "market", "MARKETDATA_READ");
+      case "/market" -> doMarket(env, p);
       case "/alerts" -> doProtectedCall(env, "alerts", "ALERTS_READ");
       case "/broker" -> doProtectedCall(env, "broker", "BROKER_READ");
       case "/trade" -> doProtectedCall(env, "trade", "BROKER_TRADE");
@@ -531,7 +533,6 @@ public class ChatCommandHandler {
 
       Map<String, Object> out;
       switch (kind) {
-        case "market" -> out = downstream.marketSecureSample(tokens.accessToken());
         case "alerts" -> out = downstream.alertsSecureSample(tokens.accessToken());
         case "broker" -> out = downstream.brokerSecureSample(tokens.accessToken());
         case "trade" -> out = downstream.brokerTradeSample(tokens.accessToken());
@@ -548,6 +549,295 @@ public class ChatCommandHandler {
     } catch (Exception e) {
       return ChatResponse.ofText("Ошибка: " + e.getMessage());
     }
+  }
+
+  private ChatResponse doMarket(ChatMessageEnvelope env, Parsed p) {
+    String sub = p.arg1() == null ? "help" : p.arg1().toLowerCase(Locale.ROOT);
+    if ("help".equals(sub) || "h".equals(sub)) {
+      return ChatResponse.ofText(marketHelpText());
+    }
+
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!res.linked()) {
+        return ChatResponse.ofText("Сначала привяжи аккаунт: /login или /register.");
+      }
+      if (!res.perms().contains("MARKETDATA_READ")) {
+        return ChatResponse.ofText("Нет прав для операции.");
+      }
+
+      var tokens = gateway.issueAccess(providerCode(env), env.externalUserId());
+      if (tokens == null || tokens.accessToken() == null || tokens.accessToken().isBlank()) {
+        return ChatResponse.ofText("Не удалось получить access token.");
+      }
+
+      Map<String, String> opts = parseOptions(p.arg2(), p.arg3());
+      String engine = opt(opts, "engine", "stock");
+      String market = opt(opts, "market", "shares");
+      String board = opt(opts, "board", "TQBR");
+
+      return switch (sub) {
+        case "instruments" ->
+            marketInstruments(tokens.accessToken(), p, opts, engine, market, board);
+        case "quote" -> marketQuote(tokens.accessToken(), p, opts, engine, market, board);
+        case "candles" -> marketCandles(tokens.accessToken(), p, opts, engine, market, board);
+        case "orderbook" -> marketOrderBook(tokens.accessToken(), p, opts, engine, market, board);
+        case "trades" -> marketTrades(tokens.accessToken(), p, opts, engine, market, board);
+        default ->
+            ChatResponse.ofText("Неизвестная подкоманда: " + sub + "\n\n" + marketHelpText());
+      };
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "market/" + sub, e));
+    } catch (Exception e) {
+      return ChatResponse.ofText("Ошибка: " + e.getMessage());
+    }
+  }
+
+  private ChatResponse marketInstruments(
+      String token,
+      Parsed p,
+      Map<String, String> opts,
+      String engine,
+      String market,
+      String board) {
+    String filter = null;
+    if (p.arg2() != null && !p.arg2().contains("=")) {
+      filter = p.arg2();
+    } else {
+      filter = opts.get("filter");
+    }
+
+    Integer limit = parseInt(opts.get("limit"));
+    if (limit == null) limit = 10;
+    if (limit < 1 || limit > 100) {
+      return ChatResponse.ofText("limit должен быть от 1 до 100.");
+    }
+
+    Integer offset = parseInt(opts.get("offset"));
+    if (offset == null) offset = 0;
+    if (offset < 0) {
+      return ChatResponse.ofText("offset должен быть >= 0.");
+    }
+
+    Map<String, Object> resp =
+        downstream.marketInstruments(token, engine, market, board, filter, limit, offset);
+    List<Map<String, Object>> items = listOfMaps(resp.get("instruments"));
+    if (items.isEmpty()) {
+      return ChatResponse.ofText("Пусто.");
+    }
+
+    List<List<String>> rows = new ArrayList<>();
+    for (Map<String, Object> item : items) {
+      rows.add(
+          List.of(
+              s(item.get("secId")),
+              s(item.get("shortName")),
+              n(item.get("lastPrice")),
+              n(item.get("prevPrice")),
+              s(item.get("currency")),
+              s(item.get("board"))));
+    }
+    String header =
+        "Инструменты"
+            + " (board="
+            + board
+            + ", limit="
+            + limit
+            + ", offset="
+            + offset
+            + (filter == null ? "" : ", filter=" + filter)
+            + ")";
+    String table = textTable.render(List.of("SEC", "NAME", "LAST", "PREV", "CUR", "BOARD"), rows);
+    return ChatResponse.of(OutgoingMessage.pre(header + "\n" + table));
+  }
+
+  private ChatResponse marketQuote(
+      String token,
+      Parsed p,
+      Map<String, String> opts,
+      String engine,
+      String market,
+      String board) {
+    String sec = positional(p.arg2());
+    if (sec == null) {
+      sec = opts.get("sec");
+    }
+    if (sec == null) {
+      return ChatResponse.ofText("Использование: /market quote <SEC> [board=TQBR]");
+    }
+
+    Map<String, Object> resp = downstream.marketQuote(token, engine, market, board, sec);
+    Map<String, Object> quote = mapOf(resp.get("quote"));
+    if (quote.isEmpty()) {
+      return ChatResponse.ofText("Нет данных по тикеру " + sec + ".");
+    }
+
+    List<List<String>> rows =
+        List.of(
+            List.of(
+                s(quote.get("secId")),
+                n(quote.get("lastPrice")),
+                n(quote.get("change")),
+                n(quote.get("changePercent")),
+                n(quote.get("volume")),
+                s(quote.get("time"))));
+    String header = "Котировка " + sec + " (board=" + board + ")";
+    String table = textTable.render(List.of("SEC", "LAST", "CHG", "CHG%", "VOL", "TIME"), rows);
+    return ChatResponse.of(OutgoingMessage.pre(header + "\n" + table));
+  }
+
+  private ChatResponse marketCandles(
+      String token,
+      Parsed p,
+      Map<String, String> opts,
+      String engine,
+      String market,
+      String board) {
+    String sec = positional(p.arg2());
+    if (sec == null) {
+      sec = opts.get("sec");
+    }
+    if (sec == null) {
+      return ChatResponse.ofText(
+          "Использование: /market candles <SEC> [interval=60 from=YYYY-MM-DD till=YYYY-MM-DD limit=10 board=TQBR]");
+    }
+
+    Integer interval = parseInt(opts.get("interval"));
+    if (interval == null) interval = 60;
+    if (!(interval == 1 || interval == 10 || interval == 60 || interval == 1440)) {
+      return ChatResponse.ofText("interval должен быть одним из: 1, 10, 60, 1440.");
+    }
+
+    Integer limit = parseInt(opts.get("limit"));
+    if (limit == null) limit = 10;
+    if (limit < 1 || limit > 100) {
+      return ChatResponse.ofText("limit должен быть от 1 до 100.");
+    }
+
+    String from = opts.get("from");
+    String till = opts.get("till");
+
+    Map<String, Object> resp =
+        downstream.marketCandles(token, engine, market, board, sec, interval, from, till);
+    List<Map<String, Object>> candles = listOfMaps(resp.get("candles"));
+    if (candles.isEmpty()) {
+      return ChatResponse.ofText("Пусто.");
+    }
+
+    int total = candles.size();
+    int fromIdx = Math.max(0, total - limit);
+    List<Map<String, Object>> slice = candles.subList(fromIdx, total);
+
+    List<List<String>> rows = new ArrayList<>();
+    for (Map<String, Object> candle : slice) {
+      rows.add(
+          List.of(
+              s(candle.get("begin")),
+              n(candle.get("open")),
+              n(candle.get("high")),
+              n(candle.get("low")),
+              n(candle.get("close")),
+              n(candle.get("volume"))));
+    }
+    String header =
+        "Свечи " + sec + " (interval=" + interval + ", shown=" + slice.size() + "/" + total + ")";
+    String table = textTable.render(List.of("BEGIN", "OPEN", "HIGH", "LOW", "CLOSE", "VOL"), rows);
+    return ChatResponse.of(OutgoingMessage.pre(header + "\n" + table));
+  }
+
+  private ChatResponse marketOrderBook(
+      String token,
+      Parsed p,
+      Map<String, String> opts,
+      String engine,
+      String market,
+      String board) {
+    String sec = positional(p.arg2());
+    if (sec == null) {
+      sec = opts.get("sec");
+    }
+    if (sec == null) {
+      return ChatResponse.ofText("Использование: /market orderbook <SEC> [depth=10 board=TQBR]");
+    }
+
+    Integer depth = parseInt(opts.get("depth"));
+    if (depth == null) depth = 10;
+    if (depth < 1 || depth > 50) {
+      return ChatResponse.ofText("depth должен быть от 1 до 50.");
+    }
+
+    Map<String, Object> resp = downstream.marketOrderBook(token, engine, market, board, sec, depth);
+    Map<String, Object> orderBook = mapOf(resp.get("orderBook"));
+    List<Map<String, Object>> bids = listOfMaps(orderBook.get("bids"));
+    List<Map<String, Object>> asks = listOfMaps(orderBook.get("asks"));
+    if (bids.isEmpty() && asks.isEmpty()) {
+      return ChatResponse.ofText("Пусто.");
+    }
+
+    StringBuilder sb = new StringBuilder();
+    sb.append("Стакан ").append(sec).append(" (depth=").append(depth).append(")\n");
+
+    if (!bids.isEmpty()) {
+      sb.append("\nBids:\n");
+      sb.append(
+          textTable.render(
+              List.of("PRICE", "QTY"), rowsFromEntries(bids, List.of("price", "quantity"))));
+    }
+    if (!asks.isEmpty()) {
+      sb.append("\n\nAsks:\n");
+      sb.append(
+          textTable.render(
+              List.of("PRICE", "QTY"), rowsFromEntries(asks, List.of("price", "quantity"))));
+    }
+
+    return ChatResponse.of(OutgoingMessage.pre(sb.toString().trim()));
+  }
+
+  private ChatResponse marketTrades(
+      String token,
+      Parsed p,
+      Map<String, String> opts,
+      String engine,
+      String market,
+      String board) {
+    String sec = positional(p.arg2());
+    if (sec == null) {
+      sec = opts.get("sec");
+    }
+    if (sec == null) {
+      return ChatResponse.ofText(
+          "Использование: /market trades <SEC> [limit=10 from=<id|ISO> board=TQBR]");
+    }
+
+    Integer limit = parseInt(opts.get("limit"));
+    if (limit == null) limit = 10;
+    if (!(limit == 1 || limit == 10 || limit == 100 || limit == 1000 || limit == 5000)) {
+      return ChatResponse.ofText("limit должен быть одним из: 1, 10, 100, 1000, 5000.");
+    }
+
+    String from = opts.get("from");
+
+    Map<String, Object> resp =
+        downstream.marketTrades(token, engine, market, board, sec, from, limit);
+    List<Map<String, Object>> trades = listOfMaps(resp.get("trades"));
+    if (trades.isEmpty()) {
+      return ChatResponse.ofText("Пусто.");
+    }
+
+    List<List<String>> rows = new ArrayList<>();
+    for (Map<String, Object> trade : trades) {
+      rows.add(
+          List.of(
+              s(trade.get("tradeNo")),
+              s(trade.get("time")),
+              n(trade.get("price")),
+              n(trade.get("quantity")),
+              s(trade.get("side"))));
+    }
+    String header =
+        "Сделки " + sec + " (limit=" + limit + (from == null ? "" : ", from=" + from) + ")";
+    String table = textTable.render(List.of("NO", "TIME", "PRICE", "QTY", "SIDE"), rows);
+    return ChatResponse.of(OutgoingMessage.pre(header + "\n" + table));
   }
 
   /* =========================
@@ -771,6 +1061,123 @@ public class ChatCommandHandler {
   /* =========================
   Formatting / parsing
   ========================= */
+
+  private static String marketHelpText() {
+    return String.join(
+        "\n",
+        "Market команды:",
+        "/market instruments [filter] [limit=10 offset=0 board=TQBR engine=stock market=shares]",
+        "/market quote <SEC> [board=TQBR]",
+        "/market candles <SEC> [interval=60 from=YYYY-MM-DD till=YYYY-MM-DD limit=10 board=TQBR]",
+        "/market orderbook <SEC> [depth=10 board=TQBR]",
+        "/market trades <SEC> [limit=10 from=<id|ISO> board=TQBR]",
+        "",
+        "Примеры:",
+        "/market instruments sber limit=20",
+        "/market quote SBER",
+        "/market candles SBER interval=60 from=2024-01-01 till=2024-01-31",
+        "/market orderbook SBER depth=5",
+        "/market trades SBER limit=100");
+  }
+
+  private static Map<String, String> parseOptions(String... parts) {
+    Map<String, String> out = new HashMap<>();
+    if (parts == null) return out;
+    for (String part : parts) {
+      if (part == null || part.isBlank()) continue;
+      for (String token : part.trim().split("\\s+")) {
+        if (token.isBlank()) continue;
+        int pos = token.indexOf('=');
+        if (pos <= 0 || pos >= token.length() - 1) continue;
+        String key = token.substring(0, pos).toLowerCase(Locale.ROOT);
+        String value = token.substring(pos + 1);
+        out.put(key, value);
+      }
+    }
+    return out;
+  }
+
+  private static String opt(Map<String, String> opts, String key, String def) {
+    if (opts == null) return def;
+    String value = opts.get(key);
+    if (value == null || value.isBlank()) return def;
+    return value;
+  }
+
+  private static String positional(String arg) {
+    if (arg == null || arg.isBlank()) return null;
+    if (arg.contains("=")) return null;
+    return arg;
+  }
+
+  private static Integer parseInt(String value) {
+    if (value == null || value.isBlank()) return null;
+    try {
+      return Integer.parseInt(value.trim());
+    } catch (NumberFormatException e) {
+      return null;
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Map<String, Object>> listOfMaps(Object value) {
+    if (!(value instanceof List<?> list)) return List.of();
+    List<Map<String, Object>> out = new ArrayList<>();
+    for (Object item : list) {
+      if (item instanceof Map<?, ?> map) {
+        out.add((Map<String, Object>) map);
+      }
+    }
+    return out;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> mapOf(Object value) {
+    if (value instanceof Map<?, ?> map) {
+      return (Map<String, Object>) map;
+    }
+    return Map.of();
+  }
+
+  private static List<List<String>> rowsFromEntries(
+      List<Map<String, Object>> entries, List<String> fields) {
+    List<List<String>> rows = new ArrayList<>();
+    for (Map<String, Object> entry : entries) {
+      List<String> row = new ArrayList<>();
+      for (String field : fields) {
+        row.add(n(entry.get(field)));
+      }
+      rows.add(row);
+    }
+    return rows;
+  }
+
+  private static String s(Object value) {
+    return value == null ? "" : String.valueOf(value);
+  }
+
+  private static String n(Object value) {
+    if (value == null) return "";
+    if (value instanceof BigDecimal decimal) {
+      return formatDecimal(decimal);
+    }
+    if (value instanceof Number number) {
+      try {
+        return formatDecimal(new BigDecimal(number.toString()));
+      } catch (NumberFormatException e) {
+        return number.toString();
+      }
+    }
+    return String.valueOf(value);
+  }
+
+  private static String formatDecimal(BigDecimal value) {
+    BigDecimal stripped = value.stripTrailingZeros();
+    if (stripped.scale() < 0) {
+      stripped = stripped.setScale(0);
+    }
+    return stripped.toPlainString();
+  }
 
   private static boolean looksLikeCredentials(String text) {
     return text != null && text.trim().split("\\s+").length >= 2;
