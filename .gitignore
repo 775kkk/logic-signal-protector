@@ -45,3 +45,5 @@ start-all.cmd
 *.err
 t.md
 .env
+Persona.md
+patch.md

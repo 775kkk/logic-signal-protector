@@ -12,6 +12,7 @@ public final class InternalDtos {
       boolean linked,
       Long userId,
       String login,
+      String displayName,
       java.util.List<String> roles,
       java.util.List<String> perms) {}
 

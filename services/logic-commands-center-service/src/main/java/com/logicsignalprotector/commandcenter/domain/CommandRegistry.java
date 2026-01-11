@@ -45,6 +45,24 @@ public class CommandRegistry {
                 set("DEVGOD", "USERS_HARD_DELETE"),
                 Set.of()),
             new CommandDef(
+                "db_menu",
+                "/db_menu",
+                "dev: меню доступа к БД",
+                true,
+                false,
+                true,
+                Set.of(),
+                set("DEVGOD", "ADMIN_USERS_PERMS_REVOKE", "COMMANDS_TOGGLE", "USERS_HARD_DELETE")),
+            new CommandDef(
+                "db",
+                "/db <SQL>",
+                "dev: SQL консоль (gateway DB)",
+                true,
+                false,
+                true,
+                Set.of(),
+                set("DEVGOD", "ADMIN_USERS_PERMS_REVOKE", "COMMANDS_TOGGLE", "USERS_HARD_DELETE")),
+            new CommandDef(
                 "login", "/login", "логин + привязка", false, true, true, Set.of(), Set.of()),
             new CommandDef(
                 "register",

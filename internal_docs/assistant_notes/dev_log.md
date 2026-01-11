@@ -1,4 +1,4 @@
-﻿# Dev log (assistant)
+﻿# Журнал разработки (ассистент)
 
 Формат записи:
 - Дата/время
@@ -7,6 +7,39 @@
 - Где лежит код/документация
 
 ---
+
+## 2026-01-11
+
+### Что сделано (шаг 1.7)
+
+  - Логика:
+    - добавлено меню работы с SQL в `/menu` (кнопка и строка в тексте);
+    - `/db_menu` сохраняет контекст и добавляет таблицы снизу, не теряя кнопки;
+    - добавлено форматирование таблиц через кнопку `Форматировать` (переключение сырой/pretty);
+    - форматирование БД теперь листает столбцы: фиксированный первый + текущий, навигация кнопками;
+    - кнопка из таблицы ведёт в `БД меню`, `/db_menu` больше не схлопывается в `/db menu`;
+    - убраны заголовки «БД: ...» в табличных ответах;
+    - в `/menu_account` скрыты User ID/роли/права для неадминов; имя убрано;
+    - в успешном `/login`/`/register` добавлена кнопка в главное меню;
+    - поддержаны алиасы `/db_tables`, `/db_history`, `/db_describe`;
+    - примеры тикеров приведены к виду `*Id*`.
+  - Telegram:
+    - рендер таблиц поддерживает формат `pretty` (ASCII рамки).
+    - DB-ответы по callback (`cmd:db:*`) объединяются в одно сообщение (редактирование вместо нового).
+- Документация:
+  - обновлены внутренние заметки и README под новые команды и причины V2.
+
+### Принятые решения
+
+- Для форматирования таблиц используется хранение последнего SQL в `ChatStateStore` (ключ `sessionId|db`).
+- В `/db_menu` таблицы отрисовываются внутри одного сообщения (меню + таблица + кнопки).
+- Форматированный вид таблицы показывает первый столбец + один текущий с пагинацией по столбцам.
+
+### Где искать
+
+- `/menu` и кнопки: `services/logic-commands-center-service/src/main/java/com/logicsignalprotector/commandcenter/domain/v2/ChatCommandHandlerV2.java`.
+- DB консоль и форматирование: `services/logic-commands-center-service/src/main/java/com/logicsignalprotector/commandcenter/domain/v2/ChatCommandHandlerV2.java`.
+- Рендер `pretty` таблиц: `services/api-telegram-service/src/main/java/com/logicsignalprotector/apitelegram/render/TelegramRendererV2.java`.
 
 ## 2026-01-09
 
@@ -27,7 +60,7 @@
   - поддержаны `editMessageText`, `deleteMessage`, `answerCallbackQuery`;
   - рендер таблиц через `<pre>` с HTML-экранированием.
 - Документация:
-  - переписаны `README.md` каждого сервиса с описанием “что делает” + “как работает” + “как реализовано”;
+  - переписаны `README.md` каждого сервиса с описанием "что делает" + "как работает" + "как реализовано";
   - добавлены/обновлены `docs/step-1.5.md`, `patch.md`, `для себя/dev_log.md`, `для себя/impl_notes.md`;
   - обновлены внутренние заметки `internal_docs/assistant_notes/*`.
 
@@ -36,7 +69,7 @@
 - `DEVGOD` разворачивается только в **effective** permissions; hard delete проверяет **raw**.
 - `/internal/commands/list` доступен по internal token без actor/RBAC.
 - Command switches: fail-open + короткий TTL.
-- Команды управления (`/help`, `/helpdev`, `/commands`, `/command`) — `toggleable=false`.
+- Команды управления (`/help`, `/helpdev`, `/commands`, `/command`) - `toggleable=false`.
 - Hard delete самого себя запрещён.
 
 ## 2026-01-10
@@ -56,7 +89,7 @@
 
 ### Принятые решения (зафиксированы в документации)
 
-- API market-data в шаге 1.6 не проксируется через gateway; клиенты ходят напрямую с access token.
+- API market-data в шаге 1.6 не проксируется через gateway; клиенты ходят напрямую с ????? ???????.
 - `MARKETDATA_ADMIN` не вводим до появления админ-ручек.
 
 ### Где искать

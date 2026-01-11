@@ -35,3 +35,13 @@ telegram:
     enabled: ${TELEGRAM_POLLING_ENABLED:false}
     fixed-delay-ms: ${TELEGRAM_POLLING_DELAY_MS:2000}
     timeout-seconds: ${TELEGRAM_POLLING_TIMEOUT_SECONDS:20}
+
+friendly:
+  templates:
+    welcome: "Добро пожаловать!"
+    help_intro: ""
+    menu_intro: ""
+    login_success: "принято. вход выполнен. дальше - /menu."
+    market_empty: "не вижу данных. попробуй изменить параметры."
+    error_default: "что-то пошло не так"
+    market_help: "/market:"

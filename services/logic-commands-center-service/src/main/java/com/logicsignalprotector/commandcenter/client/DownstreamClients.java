@@ -33,7 +33,8 @@ public class DownstreamClients {
       String board,
       String filter,
       Integer limit,
-      Integer offset) {
+      Integer offset,
+      String correlationId) {
     return this.market
         .get()
         .uri(
@@ -49,6 +50,7 @@ public class DownstreamClients {
                               add(params, "filter", filter);
                               add(params, "limit", limit);
                               add(params, "offset", offset);
+                              add(params, "correlationId", correlationId);
                             }))
                     .build())
         .header("Authorization", "Bearer " + bearerToken)
@@ -58,7 +60,12 @@ public class DownstreamClients {
 
   @SuppressWarnings("unchecked")
   public Map<String, Object> marketQuote(
-      String bearerToken, String engine, String market, String board, String sec) {
+      String bearerToken,
+      String engine,
+      String market,
+      String board,
+      String sec,
+      String correlationId) {
     return this.market
         .get()
         .uri(
@@ -72,6 +79,7 @@ public class DownstreamClients {
                               add(params, "market", market);
                               add(params, "board", board);
                               add(params, "sec", sec);
+                              add(params, "correlationId", correlationId);
                             }))
                     .build())
         .header("Authorization", "Bearer " + bearerToken)
@@ -88,7 +96,8 @@ public class DownstreamClients {
       String sec,
       Integer interval,
       String from,
-      String till) {
+      String till,
+      String correlationId) {
     return this.market
         .get()
         .uri(
@@ -105,6 +114,7 @@ public class DownstreamClients {
                               add(params, "interval", interval);
                               add(params, "from", from);
                               add(params, "till", till);
+                              add(params, "correlationId", correlationId);
                             }))
                     .build())
         .header("Authorization", "Bearer " + bearerToken)
@@ -114,7 +124,13 @@ public class DownstreamClients {
 
   @SuppressWarnings("unchecked")
   public Map<String, Object> marketOrderBook(
-      String bearerToken, String engine, String market, String board, String sec, Integer depth) {
+      String bearerToken,
+      String engine,
+      String market,
+      String board,
+      String sec,
+      Integer depth,
+      String correlationId) {
     return this.market
         .get()
         .uri(
@@ -129,6 +145,7 @@ public class DownstreamClients {
                               add(params, "board", board);
                               add(params, "sec", sec);
                               add(params, "depth", depth);
+                              add(params, "correlationId", correlationId);
                             }))
                     .build())
         .header("Authorization", "Bearer " + bearerToken)
@@ -144,7 +161,8 @@ public class DownstreamClients {
       String board,
       String sec,
       String from,
-      Integer limit) {
+      Integer limit,
+      String correlationId) {
     return this.market
         .get()
         .uri(
@@ -160,6 +178,36 @@ public class DownstreamClients {
                               add(params, "sec", sec);
                               add(params, "from", from);
                               add(params, "limit", limit);
+                              add(params, "correlationId", correlationId);
+                            }))
+                    .build())
+        .header("Authorization", "Bearer " + bearerToken)
+        .retrieve()
+        .body(Map.class);
+  }
+
+  @SuppressWarnings("unchecked")
+  public Map<String, Object> marketStatus(
+      String bearerToken,
+      String engine,
+      String market,
+      String board,
+      String sec,
+      String correlationId) {
+    return this.market
+        .get()
+        .uri(
+            uriBuilder ->
+                uriBuilder
+                    .path("/api/market/v1/status")
+                    .queryParams(
+                        marketParams(
+                            params -> {
+                              add(params, "engine", engine);
+                              add(params, "market", market);
+                              add(params, "board", board);
+                              add(params, "sec", sec);
+                              add(params, "correlationId", correlationId);
                             }))
                     .build())
         .header("Authorization", "Bearer " + bearerToken)

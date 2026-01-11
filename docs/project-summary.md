@@ -1,125 +1,139 @@
 # Дневник проекта (Logic Signal Protector)
 
+Этот файл — **живой конспект проекта**: что за сервисы есть, как они связаны, какие шаги уже сделаны и какие риски/долги остаются.
+
+Основание: код и документация из `logic-signal-protector-1.7.zip` + твой скрин с поведением `/help` и `/db`.
+
+---
+
 ## Хронология шагов (краткая выжимка)
-- Шаг 0 — bootstrap: корневой Maven-агрегатор, три сервисных модуля, простейший `/ping` в gateway.
-- Шаг 1.1 — подсистема аутентификации в `api-gateway-service`: БД `lsp_gateway`, таблицы `users`/`auth_provider`/`external_accounts`, роль `lsp_gateway_app`, REST `POST /api/auth/register`.
-- Далее (план) — бизнес-логика core-сервисов, интеграции (Telegram/уведомления), авторизация запросов.
+
+- **Шаг 0** — bootstrap: корневой Maven-агрегатор, каркас сервисов.
+- **Шаг 1.1** — базовая регистрация/логин в `api-gateway-service`, таблицы `users/auth_provider/external_accounts`.
+- **Шаг 1.2** — отладочные инструменты/логирование (исторически).
+- **Шаг 1.3** — RBAC-скелет (роли/права/переопределения), JWT, внутренние `/internal/**`.
+- **Шаг 1.4** — админ-инструменты (часть команд через chat), право `ADMIN_ANSWERS_LOG`, dev `/adminlogin <code>`.
+- **Шаг 1.5** — dev-консоль и тумблеры команд (`command_switches`), автоприсвоение dev-роли по `DEV_CONSOLE_USER_IDS`.
+- **Шаг 1.6** — `market-data-service` (MOEX ISS) + интеграция в команды (`/market_*`), кэширование.
+- **Шаг 1.7** — «Console Core v2»: структурные ответы `ChatResponseV2`, V2-рендер в Telegram, `/help` и `/menu` с секциями, dev DB-консоль `/db*`, меню/пейджеры.
 
 ---
 
-## Сервисы
+## Карта сервисов (актуально в 1.7)
 
-### 1) `api-gateway-service`
+### 1) `services/api-gateway-service`
+**Роль:** источник истины по идентичности и правам.
+- Auth: регистрация/логин, JWT (access/refresh), refresh_tokens.
+- RBAC: роли/права, overrides, расчёт эффективных прав.
+- Internal API (`/internal/**`) для сервисов (под `X-Internal-Token`).
+- Dev: bootstrap dev-роли для выбранных пользователей (`DEV_CONSOLE_USER_IDS`), внутренний endpoint DB-консоли (`/internal/db/query`).
 
-**Глобальная задача / функция / нагрузка**
-- Входная точка HTTP/REST для внешних клиентов.
-- Регистрация и (в перспективе) аутентификация пользователей.
-- Проксирование/оркестрация запросов к остальным сервисам.
-- Нагрузка: входящий веб-трафик; в будущем — проверка прав, rate limiting, защита от брутфорса, агрегирование ответов.
+**Хранилище:** Postgres (`lsp_gateway`).
 
-**Текущее состояние (после шага 1.1)**
-- Стек: Java 21; Spring Boot 3.2.x; зависимости: `spring-boot-starter-web`, `spring-boot-starter-data-jpa`, `org.postgresql:postgresql` (runtime), `spring-security-crypto` (BCrypt).
-- Конфиг (`services/api-gateway-service/src/main/resources/application.yml`):
-  - `spring.datasource.url=jdbc:postgresql://localhost:5432/lsp_gateway`
-  - `spring.datasource.username=lsp_gateway_app`
-  - `spring.datasource.password=${SPRING_DATASOURCE_PASSWORD}`
-  - `spring.jpa.hibernate.ddl-auto=validate`, `show-sql=true`, формат SQL включён
-  - `server.port=8080`
-- REST:
-  - `GET /ping` — health.
-  - `POST /api/auth/register` — регистрация, 201 -> `{id, login}`, 400 при дубликате логина (сообщение: «Пользователь с таким логином уже существует»).
-- Тестов нет; сборка проходит с `-DskipTests`.
+### 2) `services/logic-commands-center-service`
+**Роль:** командный центр (оркестратор).
+- Принимает “сырой чат” (текст/колбэки), парсит команды, решает права через gateway.
+- Держит state для UI (пагинации/контекст меню) через `ChatStateStore`.
+- Вызывает downstream сервисы (market-data, в перспективе alerts/broker и т.д.).
 
-**Классы и связь с бизнес-логикой**
-- `UserEntity` → `users`: логин (уникальный), BCrypt-хэш пароля, created_at, активность. Ядро идентичности, на `users.id` опираются привязки и дальнейшие сервисы.
-- `AuthProviderEntity` → `auth_provider`: справочник провайдеров (WEB/TELEGRAM и др.) для привязки внешних аккаунтов.
-- `ExternalAccountEntity` → `external_accounts`: связь внутреннего пользователя с внешним идентификатором; гарантирует уникальность `(provider_code, external_id)` и `(user_id, provider_code)`.
-- `UserService`: бизнес-слой регистрации (проверка дубликата, BCrypt, save в транзакции).
-- `AuthController`: HTTP-слой регистрации (JSON → сервис → HTTP 201/400).
-- `AuthConfig`: бин `PasswordEncoder` (BCrypt).
-- `PingController`: health-check `/ping`.
-- Репозитории: `UserRepository`, `AuthProviderRepository`, `ExternalAccountRepository` — поиск/CRUD для домена аутентификации.
-- equals/hashCode: `UserEntity` и `ExternalAccountEntity` — по `id` с `Hibernate.getClass`; `AuthProviderEntity` — по `code` (стабильный бизнес-ключ). Это нужно для корректной работы JPA/кэшей/коллекций.
+**Два режима ответов:**
+- **V1**: `ChatResponse` (простой текст + клавиатура).
+- **V2**: `ChatResponseV2` (набор блоков: TEXT/NOTICE/LIST/TABLE/SECTIONS/ERROR/ACTIONS).
 
-**База данных (PostgreSQL, `lsp_gateway`)** `(см шаг 1.1)`
-- Идея: отдельное хранилище только под аутентификацию и привязку внешних каналов.
-- Таблицы (по смыслу):
-  - `users`: внутренние пользователи. PK `id BIGSERIAL`; уникальный `login`; `password_hash` (BCrypt); `created_at`; `is_active`. Ядро идентичности.
-  - `auth_provider`: справочник провайдеров. PK `code`; `name`. Единый список поддерживаемых каналов.
-  - `external_accounts`: привязка внутренних пользователей к внешним аккаунтам. PK `id`; FK `user_id` -> `users`; FK `provider_code` -> `auth_provider`; `external_id`; `created_at`; `UNIQUE(provider_code, external_id)` — внешний аккаунт не дублируется; `UNIQUE(user_id, provider_code)` — один аккаунт на провайдера на пользователя.
-- Роль `lsp_gateway_app`:
-  - CONNECT к БД, USAGE на schema `public`, CRUD на таблицы, USAGE/SELECT на sequences (включая default privileges) — нужно для `BIGSERIAL`.
+**Хранилище/кэш:** Redis (для rate limit / state), Postgres не используется.
 
-**Открытые задачи для gateway**
-- Политика сложности паролей, rate limiting на регистрацию/логин.
-- Единый JSON-формат ошибок; обработка ошибок парсинга тела.
-- Подключение Spring Security/JWT, когда появится полноценная авторизация.
-- Unit/integration-тесты.
+### 3) `services/api-telegram-service`
+**Роль:** адаптер Telegram Bot API.
+- Получает updates (webhook/polling), нормализует в envelope.
+- Вызывает `logic-commands-center-service`.
+- Рендерит ответ пользователю:
+  - V1 — старый рендер.
+  - V2 — `TelegramRendererV2` (таблицы в `<pre>`, пейджеры для секций, preferEdit для навигации).
 
-### 2) Core-service (условно, заглушка)
+### 4) `services/market-data-service`
+**Роль:** доменный сервис рыночных данных (MOEX ISS).
+- REST `/api/market/v1/**` (instruments/quote/candles/orderbook/trades + status).
+- WebClient к MOEX, caching Caffeine, валидация параметров.
 
-**Глобальная задача / функция / нагрузка**
-- Предполагаемое доменное ядро: правила/сценарии/сигналы, расчёт «логических сигналов», управление бизнес-данными. (TBD, будет уточняться.)
+### 5) `services/alerts-service`
+**Статус:** заглушка (каркас, без полноценной реализации бизнес-API).
 
-**Текущее состояние**
-- Каркас Spring Boot (pom, `@SpringBootApplication`, базовый `application.yml`). Реальной логики/БД нет.
-
-**Классы**
-- Пока только стартовый класс. Планируемые сущности/сервисы — TBD; по мере появления будут описаны с привязкой к бизнес-задачам.
-
-**База данных**
-- Не подключена. План: отдельная БД/схема под доменную модель или общая БД с выделенной схемой (решить позже). Таблицы будут описаны по смыслу после проектирования.
-
-**Открытые задачи**
-- Определить доменные сущности (правила, сценарии, источники, сигналы), API, требования к хранению и индексации.
-
-### 3) Integration/notifications-service (условно, заглушка)
-
-**Глобальная задача / функция / нагрузка**
-- Интеграции и уведомления: Telegram-бот, e-mail и др.; получение событий из core/gateway и доставка сообщений. (TBD.)
-
-**Текущее состояние**
-- Каркас Spring Boot (pom, `@SpringBootApplication`, базовый `application.yml`). Реальной логики/БД нет.
-
-**Классы**
-- Пока только стартовый класс. Планируемые адаптеры (Telegram, e-mail), сервисы отправки, DTO/мапперы — TBD.
-
-**База данных**
-- Не подключена. Возможное будущее хранение: состояние доставки, настройки уведомлений пользователей. Описать по мере проектирования.
-
-**Открытые задачи**
-- Зафиксировать каналы и формат обмена с core/gateway; требования к надёжности/ретраям/журналированию.
+### 6) `services/virtual-broker-service`
+**Статус:** заглушка (каркас).
 
 ---
 
-## Хронология ключевых изменений (детальнее)
-- Шаг 0:
-  - Создан корневой Maven-агрегатор `logic-signal-protector`.
-  - Подняты три сервисных модуля (gateway + 2 каркаса), в gateway — `/ping`.
-  - Документация: `step-0-bootstrap.md`.
-- Шаг 1.1:
-  - Спроектирована БД `lsp_gateway` (`users`, `auth_provider`, `external_accounts`); создана роль `lsp_gateway_app`, выданы права на таблицы и sequences.
-  - Добавлены JPA-сущности и репозитории в gateway.
-  - Реализованы `UserService.register` (BCrypt) и REST `POST /api/auth/register`; health `/ping`.
-  - Приведён в порядок `application.yml` (datasource/jpa под `spring`, пароль через env).
-  - equals/hashCode для User/ExternalAccount переписаны на id + Hibernate class; сообщение о дубликате логина на русском; убран BOM из UserService.java.
-  - Документация: `step-1.1-auth.md`; обновлён дневник.
+## Основные потоки
+
+### V1 (текстовый ответ)
+1) Telegram → `api-telegram-service`
+2) `api-telegram-service` → `logic-commands-center-service`
+3) `logic-commands-center-service` → `api-gateway-service` `/internal/**` (resolve/perms/прочее)
+4) (опционально) `logic-commands-center-service` → доменные сервисы (market-data и др.)
+5) `api-telegram-service` отправляет текст/кнопки.
+
+### V2 (структурные блоки)
+Поток тот же, отличие в контракте ответа:
+- logic возвращает `ChatResponseV2 { blocks: [...] }`
+- telegram-адаптер решает, как показать (таблица/список/навигация по секциям/редактирование сообщения).
+
+---
+
+## Dev DB-консоль (/db*)
+
+### Команды
+- `/db_menu` — меню БД-операций.
+- `/db <SQL>` — выполнить SQL через gateway (внутренний вызов `/internal/db/query`).
+- алиасы: `/db_tables`, `/db_history`, `/db_describe` и т.п.
+
+### Доступ и наблюдаемое поведение
+- **Нужно быть привязанным (linked)**: без `/login` gateway не сможет определить пользователя.
+- Нужны **dev-права** (через роли/права в gateway).  
+  На твоём скрине это видно: `/db` отвечает *«DB команда недоступна. Проверь dev-права.»* — это штатный `FORBIDDEN`.
+- `adminlogin` **не заменяет** `/login`: он сам требует, чтобы аккаунт был уже привязан (внутри handler есть проверка “Сначала привяжи аккаунт: /login”).
+
+> Важно: флаг `dev.console.enabled` сейчас влияет на видимость dev-команд в `/help`, но **не участвует** в `MenuBuilder.canDev(...)` (то есть не является “рубильником” доступа). Это текущая реализация 1.7.
 
 ---
 
 ## Проверка и запуск (текущее)
-- Сборка: `mvn clean compile -pl services/api-gateway-service`
-- Запуск: `SPRING_DATASOURCE_PASSWORD=secret mvn spring-boot:run -pl services/api-gateway-service`
-  - Требуется живой Postgres с БД `lsp_gateway`, таблицами и ролью `lsp_gateway_app`.
-- Ручной тест: `GET /ping`; `POST /api/auth/register` с корректным JSON:
-  - новый логин → 201 + `{id, login}` и запись в `users`;
-  - повторный логин → 400 + сообщение о дубликате.
+
+Основание: корневой `README.md` + README сервисов.
+
+Минимально: Postgres + Redis + 3 сервиса
+- `api-gateway-service` (порт по умолчанию 8086)
+- `logic-commands-center-service` (8085)
+- `api-telegram-service` (8087)
+
+Конфиг — через `.env` / `.env.example`:
+- `JWT_SECRET`, `INTERNAL_API_TOKEN`, `TELEGRAM_BOT_TOKEN`
+- `DEV_CONSOLE_ENABLED` / `DEV_CONSOLE_USER_IDS`
+- `DEV_ADMIN_CODE_ENABLED` / `DEV_ADMIN_CODE`
+- `MOEX_*` (для market-data)
 
 ---
 
 ## Открытые пункты (общие)
-- Заполнить назначение/модель/БД для сервисов 2 и 3.
-- Добавить тесты.
-- Политика паролей, защита от частых попыток.
-- Единый JSON-формат ошибок.
-- Позже — Spring Security/JWT для защиты остальных эндпоинтов. 
+
+Это не “задачи на 1.7”, а заметки для следующих итераций.
+
+- Риск Telegram лимитов: `TABLE` может получиться слишком длинной → нужно резать/пагинировать по символам и/или строкам.
+- `FriendlyMessageTemplates`: если ключи ошибок и коды не в одном регистре, шаблоны не матчятся (нужно унифицировать).
+- `dev.console.enabled` сейчас не рубильник доступа к dev-меню/`/db*` (только видимость в help) — если нужен рубильник, его надо учесть в `canDev()`.
+- Дублирование V2 DTO в двух сервисах (logic и telegram) — либо общий модуль, либо контракт-тесты/fixtures.
+- Тестов почти нет; “работает” подтверждается руками (пока так и зафиксировано в docs/step-1.7.md).
+
+---
+
+## Заметки об обновлениях (2026-01-10)
+
+(Основание: `docs/step-1.7.md` + `internal_docs/assistant_notes/impl_notes.md`.)
+
+- Пагинация `/help` и `/menu` сделана в Telegram-рендере; ядро отдаёт полный `SectionsBlock`.
+- Пагинация инструментов рынка использует `ChatStateStore` и callbacks `mi:<sessionId>:<offset>`.
+- Telegram формирует стабильный `sessionId` как `fromId|chatId` и прокидывает callbacks в V2.
+- `resolve` в gateway возвращает `displayName` (пока равен login).
+- Навигация меню редактирует одно сообщение (UX без спама).
+- `/menu_account` скрывает чувствительные поля для неадминов.
+- Добавлен endpoint статуса MOEX: `/api/market/v1/status`.
+- Dev DB-консоль: форматирование pretty/raw, листание столбцов, возврат в `/db_menu`.

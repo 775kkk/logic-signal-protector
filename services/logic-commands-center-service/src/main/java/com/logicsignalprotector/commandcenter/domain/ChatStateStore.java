@@ -32,7 +32,7 @@ public class ChatStateStore {
       map.remove(key);
       return Optional.empty();
     }
-    return Optional.of(new StateEntry(e.state, e.payload));
+    return Optional.of(new StateEntry(e.state, e.payload, e.sessionId));
   }
 
   public void set(String key, ChatState state) {
@@ -54,14 +54,14 @@ public class ChatStateStore {
       return;
     }
     Duration actual = ttlOverride == null ? ttl : ttlOverride;
-    map.put(key, new Entry(state, payload, Instant.now().plus(actual)));
+    map.put(key, new Entry(state, payload, key, Instant.now().plus(actual)));
   }
 
   public void clear(String key) {
     map.remove(key);
   }
 
-  public record StateEntry(ChatState state, String payload) {}
+  public record StateEntry(ChatState state, String payload, String sessionId) {}
 
-  private record Entry(ChatState state, String payload, Instant expiresAt) {}
+  private record Entry(ChatState state, String payload, String sessionId, Instant expiresAt) {}
 }

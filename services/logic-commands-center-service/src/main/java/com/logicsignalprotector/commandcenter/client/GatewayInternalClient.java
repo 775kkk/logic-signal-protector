@@ -30,7 +30,7 @@ public class GatewayInternalClient {
             .body(new ResolveRequest(providerCode, externalUserId))
             .retrieve()
             .body(ResolveResponse.class);
-    return res == null ? new ResolveResponse(false, null, null, List.of(), List.of()) : res;
+    return res == null ? new ResolveResponse(false, null, null, null, List.of(), List.of()) : res;
   }
 
   public TokensResponse registerAndLink(
@@ -205,10 +205,29 @@ public class GatewayInternalClient {
         .body(HardDeleteResponse.class);
   }
 
+  public DbQueryResponse dbQuery(String sql, Integer maxRows) {
+    DbQueryResponse res =
+        rest.post()
+            .uri("/internal/db/query")
+            .header("X-Internal-Token", internalToken)
+            .body(new DbQueryRequest(sql, maxRows))
+            .retrieve()
+            .body(DbQueryResponse.class);
+    if (res == null) {
+      return new DbQueryResponse(false, "ERROR", List.of(), List.of(), null, false, "empty");
+    }
+    return res;
+  }
+
   public record ResolveRequest(String providerCode, String externalUserId) {}
 
   public record ResolveResponse(
-      boolean linked, Long userId, String login, List<String> roles, List<String> perms) {}
+      boolean linked,
+      Long userId,
+      String login,
+      String displayName,
+      List<String> roles,
+      List<String> perms) {}
 
   public record CredentialsLinkRequest(
       String providerCode, String externalUserId, String login, String password) {}
@@ -283,4 +302,15 @@ public class GatewayInternalClient {
   public record HardDeleteRequest(Long actorUserId, Long targetUserId, String targetLogin) {}
 
   public record HardDeleteResponse(boolean ok, Long deletedUserId, String deletedLogin) {}
+
+  public record DbQueryRequest(String sql, Integer maxRows) {}
+
+  public record DbQueryResponse(
+      boolean ok,
+      String type,
+      List<String> columns,
+      List<List<String>> rows,
+      Long updated,
+      boolean truncated,
+      String error) {}
 }

@@ -9,6 +9,10 @@ import com.logicsignalprotector.apitelegram.model.InlineKeyboard;
 import com.logicsignalprotector.apitelegram.model.OutgoingMessage;
 import com.logicsignalprotector.apitelegram.model.RenderMode;
 import com.logicsignalprotector.apitelegram.model.UiHints;
+import com.logicsignalprotector.apitelegram.model.v2.ChatResponseV2;
+import com.logicsignalprotector.apitelegram.render.TelegramRendererV2;
+import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,15 +33,18 @@ public class TelegramPollingRunner {
 
   private final CommandCenterClient commandCenter;
   private final TelegramBotClient bot;
+  private final TelegramRendererV2 rendererV2;
   private final int timeoutSeconds;
   private final AtomicLong offset = new AtomicLong(0);
 
   public TelegramPollingRunner(
       CommandCenterClient commandCenter,
       TelegramBotClient bot,
+      TelegramRendererV2 rendererV2,
       @Value("${telegram.polling.timeout-seconds:20}") int timeoutSeconds) {
     this.commandCenter = commandCenter;
     this.bot = bot;
+    this.rendererV2 = rendererV2;
     this.timeoutSeconds = timeoutSeconds;
   }
 
@@ -85,12 +92,31 @@ public class TelegramPollingRunner {
         String chatId = message.path("chat").path("id").asText();
         String fromId = message.path("from").path("id").asText();
         String messageId = message.path("message_id").asText(null);
+        String locale = message.path("from").path("language_code").asText(null);
+
+        boolean useV2 = isV2Text(text);
+        String correlationId = UUID.randomUUID().toString();
+        String sessionId = buildSessionId(fromId, chatId);
 
         ChatMessageEnvelope env =
-            new ChatMessageEnvelope("telegram", fromId, chatId, messageId, text, null);
+            new ChatMessageEnvelope(
+                "telegram",
+                fromId,
+                chatId,
+                messageId,
+                text,
+                null,
+                correlationId,
+                sessionId,
+                locale);
 
-        ChatResponse response = commandCenter.send(env);
-        sendResponse(chatId, messageId, false, response);
+        if (useV2) {
+          ChatResponseV2 response = commandCenter.sendV2(env);
+          sendResponseV2(chatId, messageId, false, response, null);
+        } else {
+          ChatResponse response = commandCenter.send(env);
+          sendResponse(chatId, messageId, false, response);
+        }
       }
 
       // Telegram expects next offset = last_update_id + 1
@@ -112,16 +138,38 @@ public class TelegramPollingRunner {
     String messageId = message.path("message_id").asText(null);
     String callbackId = callback.path("id").asText(null);
     String callbackData = callback.path("data").asText("").trim();
+    String locale = callback.path("from").path("language_code").asText(null);
 
     if (callbackData.isBlank()) {
       return;
     }
 
-    ChatMessageEnvelope env =
-        new ChatMessageEnvelope("telegram", fromId, chatId, messageId, null, callbackData);
+    boolean useV2 = isV2Callback(callbackData);
+    String correlationId = UUID.randomUUID().toString();
+    String sessionId = extractSessionId(callbackData);
+    if (sessionId == null || sessionId.isBlank()) {
+      sessionId = buildSessionId(fromId, chatId);
+    }
 
-    ChatResponse response = commandCenter.send(env);
-    sendResponse(chatId, messageId, true, response);
+    ChatMessageEnvelope env =
+        new ChatMessageEnvelope(
+            "telegram",
+            fromId,
+            chatId,
+            messageId,
+            null,
+            callbackData,
+            correlationId,
+            sessionId,
+            locale);
+
+    if (useV2) {
+      ChatResponseV2 response = commandCenter.sendV2(env);
+      sendResponseV2(chatId, messageId, true, response, callbackData);
+    } else {
+      ChatResponse response = commandCenter.send(env);
+      sendResponse(chatId, messageId, true, response);
+    }
     if (callbackId != null && !callbackId.isBlank()) {
       bot.answerCallbackQuery(callbackId);
     }
@@ -166,6 +214,15 @@ public class TelegramPollingRunner {
     }
   }
 
+  private void sendResponseV2(
+      String chatId,
+      String sourceMessageId,
+      boolean allowEdit,
+      ChatResponseV2 response,
+      String callbackData) {
+    rendererV2.render(chatId, sourceMessageId, allowEdit, response, callbackData);
+  }
+
   private static String renderText(String text, UiHints hints) {
     if (hints == null || hints.renderMode() == null) {
       return text;
@@ -183,5 +240,52 @@ public class TelegramPollingRunner {
     out = out.replace("<", "&lt;");
     out = out.replace(">", "&gt;");
     return out;
+  }
+
+  private static boolean isV2Text(String text) {
+    if (text == null) return false;
+    String t = text.trim().toLowerCase(Locale.ROOT);
+    return t.startsWith("/help")
+        || t.startsWith("/start")
+        || t.startsWith("/menu")
+        || t.startsWith("/market")
+        || t.startsWith("/db")
+        || t.startsWith("/помощь")
+        || t.startsWith("/меню")
+        || t.startsWith("/рынок")
+        || t.startsWith("/хелп")
+        || t.startsWith("/команды");
+  }
+
+  private static boolean isV2Callback(String callbackData) {
+    if (callbackData == null) return false;
+    String data = callbackData.trim();
+    return data.startsWith("h:")
+        || data.startsWith("m:")
+        || data.startsWith("mi:")
+        || data.startsWith("cmd:market")
+        || data.startsWith("cmd:menu")
+        || data.startsWith("cmd:db");
+  }
+
+  private static String extractSessionId(String callbackData) {
+    if (callbackData == null) return null;
+    String data = callbackData.trim();
+    if (data.startsWith("h:") || data.startsWith("m:") || data.startsWith("mi:")) {
+      String[] parts = data.split(":", 3);
+      if (parts.length >= 2 && !parts[1].isBlank()) {
+        return parts[1];
+      }
+    }
+    return null;
+  }
+
+  private static String buildSessionId(String fromId, String chatId) {
+    String left = fromId == null ? "" : fromId.trim();
+    String right = chatId == null ? "" : chatId.trim();
+    if (left.isBlank() && right.isBlank()) {
+      return UUID.randomUUID().toString();
+    }
+    return left + "|" + right;
   }
 }

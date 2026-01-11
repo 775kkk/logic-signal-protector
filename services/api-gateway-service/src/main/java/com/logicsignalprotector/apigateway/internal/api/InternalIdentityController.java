@@ -37,7 +37,7 @@ public class InternalIdentityController {
     var opt =
         externalAccounts.findByProviderCodeAndExternalId(req.providerCode(), req.externalUserId());
     if (opt.isEmpty()) {
-      return new InternalDtos.ResolveResponse(false, null, null, List.of(), List.of());
+      return new InternalDtos.ResolveResponse(false, null, null, null, List.of(), List.of());
     }
 
     var user = opt.get().getUser();
@@ -49,7 +49,9 @@ public class InternalIdentityController {
             .sorted()
             .collect(Collectors.toList());
 
-    return new InternalDtos.ResolveResponse(true, userId, user.getLogin(), roles, perms);
+    String displayName = user.getLogin();
+    return new InternalDtos.ResolveResponse(
+        true, userId, user.getLogin(), displayName, roles, perms);
   }
 
   /** Step 1.4: unlink external account by (providerCode, externalUserId). Idempotent. */

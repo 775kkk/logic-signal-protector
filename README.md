@@ -1,13 +1,13 @@
 # Logic Signal Protector
 
 Проект: набор микросервисов, где **командный центр** (`logic-commands-center-service`) принимает сообщения из внешних каналов (сейчас Telegram),
-проверяет identity/права в gateway (`api-gateway-service`), вызывает бизнес-сервисы и возвращает ответ для пользователя.
+проверяет идентификацию/права в gateway (`api-gateway-service`), вызывает бизнес-сервисы и возвращает ответ для пользователя.
 
 > Статус репозитория: активная разработка (шаги `docs/step-*.md`).
 
 ## 1) Карта сервисов
 
-- `services/api-gateway-service` — источник истины по identity: пользователи, привязки внешних аккаунтов, JWT (access+refresh), RBAC (roles/permissions), internal API.
+- `services/api-gateway-service` — источник истины по идентификации: пользователи, привязки внешних аккаунтов, JWT (токен доступа/токен обновления), RBAC (роли/права), внутреннее API.
 - `services/api-telegram-service` — адаптер Telegram Bot API: принимает webhook/polling updates и передаёт «сырое сообщение» в command-center.
 - `services/logic-commands-center-service` — командный центр: парсит команды, проверяет права, оркеструет вызовы сервисов, формирует ответ.
 - `services/market-data-service` — доменный сервис рыночных данных (MOEX ISS) с REST API `/api/market/v1/**`.
@@ -21,7 +21,7 @@
 3. `api-telegram-service` → `logic-commands-center-service` (HTTP)
 4. `logic-commands-center-service`:
    - парсит команду (поддержка `/cmd` и `cmd`, RU-алиасы)
-   - запрашивает identity/права в `api-gateway-service` через `/internal/**`
+   - запрашивает идентификацию/права в `api-gateway-service` через `/internal/**`
    - вызывает бизнес-сервисы
    - формирует `ChatResponse`
 5. `api-telegram-service` отправляет пользователю сообщения (поддерживает `editMessageText`, inline-кнопки, `deleteMessage`).
@@ -49,7 +49,7 @@
 - `docs/tz-step-*.md` — технические задания по шагам.
 - `services/*/README.md` — подробная документация по каждому сервису.
 - `internal_docs/assistant_notes/*` — рабочие заметки (хронология + карта реализации).
-- `для себя/*` — внутренние заметки реализации (Step 1.5).
+- `для себя/*` — внутренние заметки реализации (шаг 1.5).
 
 ## 5) Лицензия
 

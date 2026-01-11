@@ -1,9 +1,9 @@
 ﻿# virtual-broker-service
 
-## Назначение (простыми словами)
+## Назначение
 
 Каркас "виртуального брокера". Сейчас он используется как пример защищённых бизнес-ручек,
-которые требуют permissions от gateway.
+которые требуют прав от gateway.
 
 Если очень просто: это «тренировочный брокер», который не торгует по‑настоящему,
 но даёт понять, как будут проверяться права на операции.
@@ -11,7 +11,7 @@
 ## Как это работает
 
 1) Клиент вызывает защищённую ручку.
-2) Spring Security валидирует JWT access token (подпись + issuer).
+2) Spring Security валидирует JWT токен доступа (подпись + issuer).
 3) `JwtAuthConverter` превращает claims `roles`/`perms` в authorities.
 4) `@PreAuthorize` проверяет нужный `PERM_*`.
 
@@ -20,7 +20,7 @@
 Для ориентира достаточно посмотреть `SecurityConfig` и `SecureDemoController` —
 это две ключевые точки, где видно проверку токена и прав.
 
-- `security/SecurityConfig` — resource-server конфигурация.
+- `security/SecurityConfig` — конфигурация ресурсного сервера.
 - `security/JwtAuthConverter` — маппинг claims в authorities.
 - `api/SecureDemoController` — защищённые ручки.
 - `api/PingController` — открытый `GET /ping`.
@@ -44,7 +44,7 @@
 mvn -pl services/virtual-broker-service spring-boot:run
 ```
 
-Проверка (нужен валидный access token от gateway):
+Проверка (нужен валидный токен доступа от gateway):
 
 ```bash
 curl -H "Authorization: Bearer <ACCESS_TOKEN>" \

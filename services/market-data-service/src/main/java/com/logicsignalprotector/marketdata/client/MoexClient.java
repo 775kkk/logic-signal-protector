@@ -6,6 +6,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.logicsignalprotector.marketdata.config.MoexProperties;
 import com.logicsignalprotector.marketdata.dto.CandleDto;
 import com.logicsignalprotector.marketdata.dto.InstrumentDto;
+import com.logicsignalprotector.marketdata.dto.MarketStatusDto;
 import com.logicsignalprotector.marketdata.dto.OrderBookDto;
 import com.logicsignalprotector.marketdata.dto.OrderBookEntryDto;
 import com.logicsignalprotector.marketdata.dto.QuoteDto;
@@ -143,6 +144,17 @@ public class MoexClient {
     limit.ifPresent(value -> params.put("limit", Integer.toString(value)));
     JsonNode root = get(path, params);
     return parseTrades(root);
+  }
+
+  public MarketStatusDto getMarketStatus(String engine, String market, String board, String sec) {
+    String path =
+        String.format(
+            "/engines/%s/markets/%s/boards/%s/securities/%s.json", engine, market, board, sec);
+    Map<String, String> params = new HashMap<>();
+    params.put("iss.only", "marketdata");
+    params.put("marketdata.columns", "TRADINGSTATUS,SYSTIME");
+    JsonNode root = get(path, params);
+    return parseMarketStatus(root, sec, board);
   }
 
   private JsonNode get(String path, Map<String, String> params) {
@@ -309,6 +321,18 @@ public class MoexClient {
                     decimal(row, idx, "QUANTITY"),
                     text(row, idx, "BUYSELL")))
         .collect(Collectors.toList());
+  }
+
+  private MarketStatusDto parseMarketStatus(JsonNode root, String sec, String board) {
+    JsonNode section = section(root, "marketdata");
+    Map<String, Integer> idx = indexColumns(section);
+    List<JsonNode> rows = toRows(section);
+    if (rows.isEmpty()) {
+      throw new MoexClientException("MOEX ISS returned empty marketdata for " + sec);
+    }
+    JsonNode row = rows.get(0);
+    return new MarketStatusDto(
+        "MOEX", board, sec, text(row, idx, "TRADINGSTATUS"), dateTime(row, idx, "SYSTIME"));
   }
 
   private static boolean containsIgnoreCase(String value, String query) {

@@ -8,4 +8,7 @@ public record ChatMessageEnvelope(
     @NotBlank String chatId,
     String messageId,
     String text,
-    String callbackData) {}
+    String callbackData,
+    String correlationId,
+    String sessionId,
+    String locale) {}

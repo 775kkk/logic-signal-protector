@@ -40,6 +40,16 @@ public class ChatCommandHandler {
   private static final String PERM_USERS_HARD_DELETE = "USERS_HARD_DELETE";
 
   private static final int COMMANDS_PAGE_SIZE = 10;
+  private static final int DB_DEFAULT_MAX_ROWS = 50;
+  private static final int DB_TABLES_MAX_ROWS = 200;
+  private static final String DB_TABLES_SQL =
+      "select table_schema, table_name from information_schema.tables "
+          + "where table_schema not in ('pg_catalog','information_schema') "
+          + "order by table_schema, table_name";
+  private static final String DB_HISTORY_SQL =
+      "select installed_rank, version, description, type, script, checksum, installed_by, "
+          + "installed_on, execution_time, success from flyway_schema_history "
+          + "order by installed_rank";
 
   private final GatewayInternalClient gateway;
   private final DownstreamClients downstream;
@@ -82,10 +92,11 @@ public class ChatCommandHandler {
     }
 
     String normalized = normalizeInput(input);
+    normalized = expandUnderscoreCommands(normalized);
     String key = stateKey(env);
 
     ChatStateStore.StateEntry entry =
-        stateStore.get(key).orElse(new ChatStateStore.StateEntry(ChatState.NONE, null));
+        stateStore.get(key).orElse(new ChatStateStore.StateEntry(ChatState.NONE, null, null));
     ChatState st = entry.state();
 
     // cancel should work in any state
@@ -141,6 +152,8 @@ public class ChatCommandHandler {
       case "/register" -> handleRegisterCommand(env, key, p);
       case "/logout" -> handleLogoutRequest(env, key, p);
       case "/me" -> doMe(env);
+      case "/db_menu" -> doDbMenu(env);
+      case "/db" -> doDb(env, normalized);
       case "/market" -> doMarket(env, p);
       case "/alerts" -> doProtectedCall(env, "alerts", "ALERTS_READ");
       case "/broker" -> doProtectedCall(env, "broker", "BROKER_READ");
@@ -428,23 +441,86 @@ public class ChatCommandHandler {
         return ChatResponse.ofText("Аккаунт не привязан. Используй /login или /register.");
       }
 
-      boolean canRaw = res.perms().contains(PERM_ADMIN_ANSWERS_LOG);
-      if (!canRaw) {
-        return ChatResponse.ofText(
-            "Привязано: login=" + res.login() + "\nroles=" + String.join(", ", res.roles()));
+      boolean revealDetails = canRevealAccountDetails(res);
+      if (!revealDetails) {
+        return ChatResponse.ofText("Привязка: активна\nЛогин: " + safe(res.login()));
       }
 
       return ChatResponse.ofText(
-          "Привязано: userId="
+          "Привязка: активна\nUser ID: "
               + res.userId()
-              + ", login="
-              + res.login()
-              + "\nroles="
+              + "\nЛогин: "
+              + safe(res.login())
+              + "\nРоли: "
               + res.roles()
-              + "\nperms="
+              + "\nПрава: "
               + res.perms());
     } catch (RestClientResponseException e) {
       return ChatResponse.ofText(formatError(canSeeRaw(env), "me", e));
+    }
+  }
+
+  private ChatResponse doDbMenu(ChatMessageEnvelope env) {
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!isDevAdmin(res)) {
+        return ChatResponse.ofText("DB меню недоступно. Проверь dev-права.");
+      }
+      String text =
+          String.join(
+              "\n",
+              "DB консоль (dev-only):",
+              "- /db <SQL> - выполнить SQL",
+              "- /db_tables - список таблиц",
+              "- /db_describe <schema.table> - структура таблицы",
+              "- /db_history - flyway_schema_history",
+              "Результаты ограничены первыми "
+                  + DB_DEFAULT_MAX_ROWS
+                  + " строками (используй LIMIT).");
+      return ChatResponse.ofText(text);
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "db_menu", e));
+    }
+  }
+
+  private ChatResponse doDb(ChatMessageEnvelope env, String input) {
+    try {
+      var res = gateway.resolve(providerCode(env), env.externalUserId());
+      if (!isDevAdmin(res)) {
+        return ChatResponse.ofText("DB команда недоступна. Проверь dev-права.");
+      }
+      DbPlan plan = resolveDbPlan(input);
+      if (plan == null || plan.sql() == null || plan.sql().isBlank()) {
+        String msg = plan == null ? "Нужен SQL." : plan.error();
+        return ChatResponse.ofText(
+            (msg == null || msg.isBlank() ? "Нужен SQL." : msg) + " /db_menu");
+      }
+      var resp = gateway.dbQuery(plan.sql(), plan.maxRows());
+      if (resp == null || !resp.ok()) {
+        String error = resp == null ? null : resp.error();
+        return ChatResponse.ofText("Ошибка SQL: " + safeDbError(error));
+      }
+      String type = resp.type();
+      if (type != null && type.equalsIgnoreCase("UPDATE")) {
+        String message =
+            resp.updated() == null ? "Готово." : "Готово. Затронуто строк: " + resp.updated();
+        return ChatResponse.ofText(message);
+      }
+
+      List<String> columns = resp.columns() == null ? List.of() : resp.columns();
+      List<List<String>> rows = resp.rows() == null ? List.of() : resp.rows();
+      if (columns.isEmpty()) {
+        return ChatResponse.ofText("Нет данных.");
+      }
+      String table = textTable.render(columns, rows);
+      StringBuilder sb = new StringBuilder();
+      if (resp.truncated()) {
+        sb.append("Показаны первые ").append(plan.maxRows()).append(" строк. Используй LIMIT.\n");
+      }
+      sb.append(table);
+      return ChatResponse.of(OutgoingMessage.pre(sb.toString()));
+    } catch (RestClientResponseException e) {
+      return ChatResponse.ofText(formatError(canSeeRaw(env), "db", e));
     }
   }
 
@@ -472,6 +548,7 @@ public class ChatCommandHandler {
                     "Ок. Привязка завершена.\nlogin=" + safe(t.login()) + "\nperms=" + t.perms())
                 .deleteSourceMessage();
       }
+      msg = msg.withKeyboard(buildMainMenuKeyboard());
       return ChatResponse.of(msg);
     } catch (RestClientResponseException e) {
       stateStore.set(key, ChatState.AWAIT_LOGIN_CREDENTIALS);
@@ -508,6 +585,7 @@ public class ChatCommandHandler {
                         + t.perms())
                 .deleteSourceMessage();
       }
+      msg = msg.withKeyboard(buildMainMenuKeyboard());
       return ChatResponse.of(msg);
     } catch (RestClientResponseException e) {
       stateStore.set(key, ChatState.AWAIT_REGISTER_CREDENTIALS);
@@ -578,11 +656,12 @@ public class ChatCommandHandler {
 
       return switch (sub) {
         case "instruments" ->
-            marketInstruments(tokens.accessToken(), p, opts, engine, market, board);
-        case "quote" -> marketQuote(tokens.accessToken(), p, opts, engine, market, board);
-        case "candles" -> marketCandles(tokens.accessToken(), p, opts, engine, market, board);
-        case "orderbook" -> marketOrderBook(tokens.accessToken(), p, opts, engine, market, board);
-        case "trades" -> marketTrades(tokens.accessToken(), p, opts, engine, market, board);
+            marketInstruments(env, tokens.accessToken(), p, opts, engine, market, board);
+        case "quote" -> marketQuote(env, tokens.accessToken(), p, opts, engine, market, board);
+        case "candles" -> marketCandles(env, tokens.accessToken(), p, opts, engine, market, board);
+        case "orderbook" ->
+            marketOrderBook(env, tokens.accessToken(), p, opts, engine, market, board);
+        case "trades" -> marketTrades(env, tokens.accessToken(), p, opts, engine, market, board);
         default ->
             ChatResponse.ofText("Неизвестная подкоманда: " + sub + "\n\n" + marketHelpText());
       };
@@ -594,6 +673,7 @@ public class ChatCommandHandler {
   }
 
   private ChatResponse marketInstruments(
+      ChatMessageEnvelope env,
       String token,
       Parsed p,
       Map<String, String> opts,
@@ -620,7 +700,8 @@ public class ChatCommandHandler {
     }
 
     Map<String, Object> resp =
-        downstream.marketInstruments(token, engine, market, board, filter, limit, offset);
+        downstream.marketInstruments(
+            token, engine, market, board, filter, limit, offset, env.correlationId());
     List<Map<String, Object>> items = listOfMaps(resp.get("instruments"));
     if (items.isEmpty()) {
       return ChatResponse.ofText("Пусто.");
@@ -652,6 +733,7 @@ public class ChatCommandHandler {
   }
 
   private ChatResponse marketQuote(
+      ChatMessageEnvelope env,
       String token,
       Parsed p,
       Map<String, String> opts,
@@ -663,10 +745,11 @@ public class ChatCommandHandler {
       sec = opts.get("sec");
     }
     if (sec == null) {
-      return ChatResponse.ofText("Использование: /market quote <SEC> [board=TQBR]");
+      return ChatResponse.ofText("Использование: /market_quote <SEC> [board=TQBR]");
     }
 
-    Map<String, Object> resp = downstream.marketQuote(token, engine, market, board, sec);
+    Map<String, Object> resp =
+        downstream.marketQuote(token, engine, market, board, sec, env.correlationId());
     Map<String, Object> quote = mapOf(resp.get("quote"));
     if (quote.isEmpty()) {
       return ChatResponse.ofText("Нет данных по тикеру " + sec + ".");
@@ -687,6 +770,7 @@ public class ChatCommandHandler {
   }
 
   private ChatResponse marketCandles(
+      ChatMessageEnvelope env,
       String token,
       Parsed p,
       Map<String, String> opts,
@@ -699,7 +783,7 @@ public class ChatCommandHandler {
     }
     if (sec == null) {
       return ChatResponse.ofText(
-          "Использование: /market candles <SEC> [interval=60 from=YYYY-MM-DD till=YYYY-MM-DD limit=10 board=TQBR]");
+          "Использование: /market_candles <SEC> [interval=60 from=YYYY-MM-DD till=YYYY-MM-DD limit=10 board=TQBR]");
     }
 
     Integer interval = parseInt(opts.get("interval"));
@@ -718,7 +802,8 @@ public class ChatCommandHandler {
     String till = opts.get("till");
 
     Map<String, Object> resp =
-        downstream.marketCandles(token, engine, market, board, sec, interval, from, till);
+        downstream.marketCandles(
+            token, engine, market, board, sec, interval, from, till, env.correlationId());
     List<Map<String, Object>> candles = listOfMaps(resp.get("candles"));
     if (candles.isEmpty()) {
       return ChatResponse.ofText("Пусто.");
@@ -746,6 +831,7 @@ public class ChatCommandHandler {
   }
 
   private ChatResponse marketOrderBook(
+      ChatMessageEnvelope env,
       String token,
       Parsed p,
       Map<String, String> opts,
@@ -757,7 +843,7 @@ public class ChatCommandHandler {
       sec = opts.get("sec");
     }
     if (sec == null) {
-      return ChatResponse.ofText("Использование: /market orderbook <SEC> [depth=10 board=TQBR]");
+      return ChatResponse.ofText("Использование: /market_orderbook <SEC> [depth=10 board=TQBR]");
     }
 
     Integer depth = parseInt(opts.get("depth"));
@@ -766,7 +852,8 @@ public class ChatCommandHandler {
       return ChatResponse.ofText("depth должен быть от 1 до 50.");
     }
 
-    Map<String, Object> resp = downstream.marketOrderBook(token, engine, market, board, sec, depth);
+    Map<String, Object> resp =
+        downstream.marketOrderBook(token, engine, market, board, sec, depth, env.correlationId());
     Map<String, Object> orderBook = mapOf(resp.get("orderBook"));
     List<Map<String, Object>> bids = listOfMaps(orderBook.get("bids"));
     List<Map<String, Object>> asks = listOfMaps(orderBook.get("asks"));
@@ -794,6 +881,7 @@ public class ChatCommandHandler {
   }
 
   private ChatResponse marketTrades(
+      ChatMessageEnvelope env,
       String token,
       Parsed p,
       Map<String, String> opts,
@@ -806,7 +894,7 @@ public class ChatCommandHandler {
     }
     if (sec == null) {
       return ChatResponse.ofText(
-          "Использование: /market trades <SEC> [limit=10 from=<id|ISO> board=TQBR]");
+          "Использование: /market_trades <SEC> [limit=10 from=<id|ISO> board=TQBR]");
     }
 
     Integer limit = parseInt(opts.get("limit"));
@@ -818,7 +906,8 @@ public class ChatCommandHandler {
     String from = opts.get("from");
 
     Map<String, Object> resp =
-        downstream.marketTrades(token, engine, market, board, sec, from, limit);
+        downstream.marketTrades(
+            token, engine, market, board, sec, from, limit, env.correlationId());
     List<Map<String, Object>> trades = listOfMaps(resp.get("trades"));
     if (trades.isEmpty()) {
       return ChatResponse.ofText("Пусто.");
@@ -1066,18 +1155,112 @@ public class ChatCommandHandler {
     return String.join(
         "\n",
         "Market команды:",
-        "/market instruments [filter] [limit=10 offset=0 board=TQBR engine=stock market=shares]",
-        "/market quote <SEC> [board=TQBR]",
-        "/market candles <SEC> [interval=60 from=YYYY-MM-DD till=YYYY-MM-DD limit=10 board=TQBR]",
-        "/market orderbook <SEC> [depth=10 board=TQBR]",
-        "/market trades <SEC> [limit=10 from=<id|ISO> board=TQBR]",
+        "/market_instruments [filter] [limit=10 offset=0 board=TQBR engine=stock market=shares]",
+        "/market_quote <SEC> [board=TQBR]",
+        "/market_candles <SEC> [interval=60 from=YYYY-MM-DD till=YYYY-MM-DD limit=10 board=TQBR]",
+        "/market_orderbook <SEC> [depth=10 board=TQBR]",
+        "/market_trades <SEC> [limit=10 from=<id|ISO> board=TQBR]",
         "",
         "Примеры:",
-        "/market instruments sber limit=20",
-        "/market quote SBER",
-        "/market candles SBER interval=60 from=2024-01-01 till=2024-01-31",
-        "/market orderbook SBER depth=5",
-        "/market trades SBER limit=100");
+        "/market_instruments *Id* limit=20",
+        "/market_quote *Id*",
+        "/market_candles *Id* interval=60 from=2024-01-01 till=2024-01-31",
+        "/market_orderbook *Id* depth=5",
+        "/market_trades *Id* limit=100");
+  }
+
+  private boolean isDevAdmin(GatewayInternalClient.ResolveResponse res) {
+    if (!devConsoleEnabled || res == null || !res.linked() || res.perms() == null) {
+      return false;
+    }
+    if (res.perms().contains(PERM_DEVGOD)) {
+      return true;
+    }
+    return hasAnyPerm(
+        res.perms(), Set.of(PERM_ADMIN_MANAGE, PERM_COMMANDS_TOGGLE, PERM_USERS_HARD_DELETE));
+  }
+
+  private boolean canRevealAccountDetails(GatewayInternalClient.ResolveResponse res) {
+    if (res == null || !res.linked() || res.perms() == null) {
+      return false;
+    }
+    if (res.perms().contains(PERM_DEVGOD)) {
+      return true;
+    }
+    return hasAnyPerm(
+        res.perms(), Set.of(PERM_ADMIN_MANAGE, PERM_COMMANDS_TOGGLE, PERM_USERS_HARD_DELETE));
+  }
+
+  private DbPlan resolveDbPlan(String input) {
+    String rest = extractDbSql(input);
+    if (rest == null || rest.isBlank()) {
+      return new DbPlan(null, DB_DEFAULT_MAX_ROWS, null, "Нужен SQL.");
+    }
+    String trimmed = rest.trim();
+    String[] parts = trimmed.split("\\s+", 2);
+    String cmd = parts[0].toLowerCase(Locale.ROOT);
+    String arg = parts.length > 1 ? parts[1].trim() : null;
+    return switch (cmd) {
+      case "tables" -> new DbPlan(DB_TABLES_SQL, DB_TABLES_MAX_ROWS, "Таблицы", null);
+      case "history", "flyway" -> new DbPlan(DB_HISTORY_SQL, DB_TABLES_MAX_ROWS, "Flyway", null);
+      case "describe", "desc" -> {
+        if (arg == null || arg.isBlank()) {
+          yield new DbPlan(
+              null, DB_DEFAULT_MAX_ROWS, null, "Нужна таблица. Пример: /db_describe public.users");
+        }
+        String schema = "public";
+        String table = arg;
+        int dot = arg.indexOf('.');
+        if (dot > 0 && dot < arg.length() - 1) {
+          schema = arg.substring(0, dot);
+          table = arg.substring(dot + 1);
+        }
+        if (table.isBlank()) {
+          yield new DbPlan(
+              null, DB_DEFAULT_MAX_ROWS, null, "Нужна таблица. Пример: /db_describe public.users");
+        }
+        String sql =
+            "select column_name, data_type, is_nullable, column_default "
+                + "from information_schema.columns "
+                + "where table_schema='"
+                + escapeSqlLiteral(schema)
+                + "' and table_name='"
+                + escapeSqlLiteral(table)
+                + "' order by ordinal_position";
+        yield new DbPlan(sql, DB_TABLES_MAX_ROWS, "Структура " + schema + "." + table, null);
+      }
+      default -> new DbPlan(trimmed, DB_DEFAULT_MAX_ROWS, "SQL", null);
+    };
+  }
+
+  private static String extractDbSql(String input) {
+    if (input == null || input.isBlank()) {
+      return null;
+    }
+    String trimmed = input.trim();
+    if (!trimmed.startsWith("/db")) {
+      return null;
+    }
+    String rest = trimmed.substring("/db".length());
+    return rest == null ? null : rest.trim();
+  }
+
+  private static String safeDbError(String error) {
+    if (error == null || error.isBlank()) {
+      return "Проверь запрос.";
+    }
+    String text = error.replace("\n", " ").replace("\r", " ").trim();
+    if (text.length() > 240) {
+      text = text.substring(0, 240) + "...";
+    }
+    return text;
+  }
+
+  private static String escapeSqlLiteral(String value) {
+    if (value == null) {
+      return "";
+    }
+    return value.replace("'", "''").trim();
   }
 
   private static Map<String, String> parseOptions(String... parts) {
@@ -1235,6 +1418,10 @@ public class ChatCommandHandler {
     m.put("/я", "/me");
     m.put("/профиль", "/me");
 
+    // db
+    m.put("/db", "/db");
+    m.put("/db_menu", "/db_menu");
+
     // demo/protected calls
     m.put("/market", "/market");
     m.put("/рынок", "/market");
@@ -1284,6 +1471,10 @@ public class ChatCommandHandler {
   }
 
   private static String stateKey(ChatMessageEnvelope env) {
+    String sessionId = env.sessionId();
+    if (sessionId != null && !sessionId.isBlank()) {
+      return sessionId;
+    }
     return env.channel() + "|" + env.externalUserId() + "|" + env.chatId();
   }
 
@@ -1325,6 +1516,40 @@ public class ChatCommandHandler {
       sb.append(" ").append(parts[i]);
     }
     return sb.toString();
+  }
+
+  private static String expandUnderscoreCommands(String input) {
+    if (input == null || input.isBlank()) {
+      return input;
+    }
+    String trimmed = input.trim();
+    if (trimmed.startsWith("/db_menu")) {
+      return trimmed;
+    }
+    if (trimmed.startsWith("/db_")) {
+      int space = trimmed.indexOf(' ');
+      String cmd = space == -1 ? trimmed : trimmed.substring(0, space);
+      String rest = space == -1 ? "" : trimmed.substring(space);
+      String sub = cmd.substring("/db_".length());
+      if (!sub.isBlank()) {
+        return "/db " + sub + rest;
+      }
+    }
+    if (trimmed.startsWith("/market_")) {
+      int space = trimmed.indexOf(' ');
+      String cmd = space == -1 ? trimmed : trimmed.substring(0, space);
+      String rest = space == -1 ? "" : trimmed.substring(space);
+      String sub = cmd.substring("/market_".length());
+      if (!sub.isBlank()) {
+        return "/market " + sub + rest;
+      }
+    }
+    if (trimmed.startsWith("/user_delete")) {
+      int space = trimmed.indexOf(' ');
+      String rest = space == -1 ? "" : trimmed.substring(space);
+      return "/user delete" + rest;
+    }
+    return trimmed;
   }
 
   /**
@@ -1379,12 +1604,17 @@ public class ChatCommandHandler {
     }
     List<InlineKeyboard.Button> row = new ArrayList<>();
     if (page > 1) {
-      row.add(new InlineKeyboard.Button("Prev", "cmd:commands:page=" + (page - 1)));
+      row.add(new InlineKeyboard.Button("Назад", "cmd:commands:page=" + (page - 1)));
     }
     if (page < totalPages) {
-      row.add(new InlineKeyboard.Button("Next", "cmd:commands:page=" + (page + 1)));
+      row.add(new InlineKeyboard.Button("Дальше", "cmd:commands:page=" + (page + 1)));
     }
     return row.isEmpty() ? null : new InlineKeyboard(List.of(row));
+  }
+
+  private InlineKeyboard buildMainMenuKeyboard() {
+    return new InlineKeyboard(
+        List.of(List.of(new InlineKeyboard.Button("Главное меню", "cmd:menu"))));
   }
 
   private static int parsePage(String arg) {
@@ -1528,4 +1758,6 @@ public class ChatCommandHandler {
   }
 
   private record Parsed(String cmd, String arg1, String arg2, String arg3) {}
+
+  private record DbPlan(String sql, int maxRows, String title, String error) {}
 }

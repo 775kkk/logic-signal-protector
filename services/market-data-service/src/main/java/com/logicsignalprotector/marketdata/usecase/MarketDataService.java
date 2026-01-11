@@ -3,6 +3,7 @@ package com.logicsignalprotector.marketdata.usecase;
 import com.logicsignalprotector.marketdata.client.MoexClient;
 import com.logicsignalprotector.marketdata.dto.CandleDto;
 import com.logicsignalprotector.marketdata.dto.InstrumentDto;
+import com.logicsignalprotector.marketdata.dto.MarketStatusDto;
 import com.logicsignalprotector.marketdata.dto.OrderBookDto;
 import com.logicsignalprotector.marketdata.dto.OrderBookEntryDto;
 import com.logicsignalprotector.marketdata.dto.QuoteDto;
@@ -64,5 +65,10 @@ public class MarketDataService implements MarketDataUseCase {
       Optional<String> from,
       Optional<Integer> limit) {
     return moexClient.getTrades(engine, market, board, sec, from, limit);
+  }
+
+  @Override
+  public MarketStatusDto getMarketStatus(String engine, String market, String board, String sec) {
+    return moexClient.getMarketStatus(engine, market, board, sec);
   }
 }

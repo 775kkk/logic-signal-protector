@@ -2,6 +2,7 @@ package com.logicsignalprotector.marketdata.usecase;
 
 import com.logicsignalprotector.marketdata.dto.CandleDto;
 import com.logicsignalprotector.marketdata.dto.InstrumentDto;
+import com.logicsignalprotector.marketdata.dto.MarketStatusDto;
 import com.logicsignalprotector.marketdata.dto.OrderBookDto;
 import com.logicsignalprotector.marketdata.dto.QuoteDto;
 import com.logicsignalprotector.marketdata.dto.TradeDto;
@@ -33,4 +34,6 @@ public interface MarketDataUseCase {
       String sec,
       Optional<String> from,
       Optional<Integer> limit);
+
+  MarketStatusDto getMarketStatus(String engine, String market, String board, String sec);
 }

@@ -323,11 +323,11 @@ Mini Apps — это HTML5 web app внутри Telegram. Это другой UX
 2. /help и /helpdev:
 
    * фильтрация по enabled/perms/devflag
-3. Табличный renderer (ASCII) + uiHints
+3. Табличный рендерер (ASCII) + uiHints
 4. Команды управления тумблерами + dev-команды пользователей
 5. Проверки:
 
-   * RBAC для пользователя (через gateway internal identity/rbac)
+* RBAC для пользователя (через gateway internal API: идентификация/RBAC)
    * command enabled (через gateway internal commands)
 
 ### 13.3 api-telegram-service
@@ -370,7 +370,7 @@ Mini Apps — это HTML5 web app внутри Telegram. Это другой UX
 **Основано на текущем состоянии сервисов 1.4, который я вижу в коде:**
 
 * Миграции + пара таблиц + internal endpoints в gateway: **средняя** (структура уже есть, RBAC уже есть).
-* Registry команд + help-фильтрация + table renderer в logic: **средняя** (это в основном прикладной код без “страшных” интеграций).
+* Registry команд + help-фильтрация + table рендерер в logic: **средняя** (это в основном прикладной код без “страшных” интеграций).
 * Inline keyboard + editMessageText в telegram service: **средняя** (Telegram API это поддерживает напрямую; главное — аккуратный state/message_id).
 * Самое “тонкое”: корректно продумать **security при обходе gateway** (но у нас уже есть internal token и RBAC в gateway; добавляем service-level checks — это правильный путь).
 

@@ -1,9 +1,9 @@
 ﻿# alerts-service
 
-## Назначение (простыми словами)
+## Назначение
 
 Это каркас сервиса алертов/уведомлений. Сейчас он нужен как демонстрация того,
-как downstream-сервисы проверяют JWT от gateway и требуют нужные permissions.
+как downstream-сервисы проверяют JWT от gateway и требуют нужные права.
 
 Человеческое объяснение: это «учебная площадка» для проверки безопасности.
 Здесь нет реальной бизнес‑логики, но есть все ключевые механики доступа.
@@ -11,7 +11,7 @@
 ## Как это работает
 
 1) Клиент вызывает защищённую ручку.
-2) Spring Security проверяет JWT access token:
+2) Spring Security проверяет JWT токен доступа:
    - подпись (HMAC, общий секрет с gateway),
    - issuer.
 3) `JwtAuthConverter` превращает claims `roles` и `perms` в authorities:
@@ -24,7 +24,7 @@
 Если нужно понять механику, достаточно открыть `SecurityConfig` и `SecureDemoController` —
 там видно, как JWT превращается в доступ.
 
-- `security/SecurityConfig` — resource-server конфигурация.
+- `security/SecurityConfig` — конфигурация ресурсного сервера.
 - `security/JwtAuthConverter` — маппинг claims в authorities.
 - `api/SecureDemoController` — защищённая ручка с `@PreAuthorize`.
 - `api/PingController` — открытый `GET /ping`.
@@ -47,7 +47,7 @@
 mvn -pl services/alerts-service spring-boot:run
 ```
 
-Проверка (нужен валидный access token от gateway):
+Проверка (нужен валидный токен доступа от gateway):
 
 ```bash
 curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
