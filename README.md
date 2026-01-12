@@ -87,7 +87,7 @@ Logic возвращает **структуру**: `TEXT/LIST/TABLE/SECTIONS/ERR
 - Docker + Docker Compose
 
 ### 1) Env
-Скопируй `.env.example` → `.env` и заполни минимум:
+
 - `JWT_SECRET` (>= 32 байт)
 - `INTERNAL_API_TOKEN` (одинаковый для gateway и command-center)
 - `TELEGRAM_BOT_TOKEN` (если нужен реальный Telegram)
