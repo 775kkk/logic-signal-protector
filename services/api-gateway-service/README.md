@@ -789,6 +789,14 @@ Rate-limit сейчас включён только на **public**:
 
 * `SPRING_DATASOURCE_*` — Postgres.
 
+* `DEV_CONSOLE_ENABLED` — включение dev-консоли (ручки/команды, которые вы не хотите иметь в prod).
+
+* `DEV_CONSOLE_USER_IDS` — список userId, которым при старте выдаются dev-роли/права (bootstrap).
+
+* `OTLP_TRACING_ENDPOINT` — endpoint OTLP (например, Jaeger/Tempo) для распределённого трейсинга.
+
+* `TRACING_SAMPLING_PROBABILITY` — доля семплирования трейсов (0..1).
+
 Порт по умолчанию: `8086`.
 
 Swagger UI: `/swagger-ui.html`

@@ -21,10 +21,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Step 1.3-1.5: optional Telegram long-polling mode.
+ * Шаг 1.3-1.5: дополнительный режим длительного опроса Telegram.
  *
- * <p>Useful for local development without a public webhook URL. Enabled only when
- * telegram.polling.enabled=true.
+ * <p>Полезно для локальной разработки без общедоступного URL-адреса webhook. Включено только в том
+ * случае, если telegram.polling.enabled=true.
  */
 @Component
 @Slf4j

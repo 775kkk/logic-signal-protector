@@ -3,10 +3,11 @@ package com.logicsignalprotector.apitelegram.model;
 import jakarta.validation.constraints.NotBlank;
 
 /**
- * Universal chat message envelope (step 1.4).
+ * Универсальный конверт для сообщений в чате (шаг 1.4).
  *
- * <p>This DTO allows different external chat adapters (Telegram, Discord, WebChat...) to pass raw
- * user messages into a single "brain" service without duplicating parsing logic.
+ * <p>позволяет различным внешним адаптерам чата (Telegram, Discord, WebChat...) передавать
+ * необработанные передача пользовательских сообщений в единый "мозговой" сервис без дублирования
+ * логики синтаксического анализа.
  */
 public record ChatMessageEnvelope(
     @NotBlank String channel,

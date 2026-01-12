@@ -38,11 +38,14 @@ public class TokenService {
 
     JwtClaimsSet claims =
         JwtClaimsSet.builder()
-            .issuer(issuer)
-            .issuedAt(now)
-            .expiresAt(now.plus(ttl))
+            .issuer(issuer) // из security.jwt.issuer (по умолчанию lsp-api-gateway)
+            .issuedAt(now) // текущее время
+            .expiresAt(
+                now.plus(
+                    ttl)) // текущее время + TTL (security.jwt.access-ttl, по умолчанию 15 минут
+            // PT15M)
             .subject(user.getLogin())
-            .claim("uid", user.getId())
+            .claim("uid", user.getId()) // userId
             .claim("roles", roleCodes)
             .claim("perms", permCodes)
             .build();
