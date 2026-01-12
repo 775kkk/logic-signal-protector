@@ -37,3 +37,13 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+# Local helper scripts
+start.cmd
+start-all.cmd
+*.log
+*.err
+t.md
+.env
+Persona.md
+patch.md

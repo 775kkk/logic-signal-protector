@@ -2,5 +2,32 @@ spring:
   application:
     name: market-data-service
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
 server:
   port: 8081
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-change-me-dev-only-change-me}
+    issuer: ${JWT_ISSUER:lsp-api-gateway}
+
+market:
+  moex:
+    base-url: ${MOEX_BASE_URL:https://iss.moex.com/iss}
+    timeout: ${MOEX_TIMEOUT:5s}
+    cache-ttl: ${MOEX_CACHE_TTL:30s}

@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: logic-commands-center-service
+
+server:
+  port: 8085
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+gateway:
+  internal:
+    base-url: ${GATEWAY_INTERNAL_BASE_URL:http://localhost:8086}
+    token: ${INTERNAL_API_TOKEN:dev-internal-token-change-me}
+
+services:
+  market-data:
+    base-url: ${MARKET_DATA_BASE_URL:http://localhost:8081}
+  alerts:
+    base-url: ${ALERTS_BASE_URL:http://localhost:8082}
+  broker:
+    base-url: ${BROKER_BASE_URL:http://localhost:8083}
+
+chat:
+  state:
+    ttl: ${CHAT_STATE_TTL:PT10M}
+  hard-delete:
+    confirm-ttl: ${CHAT_HARD_DELETE_CONFIRM_TTL:PT60S}
+
+command:
+  switch:
+    cache-ttl: ${COMMAND_SWITCH_CACHE_TTL:PT10S}
+
+# Step 1.4: in-memory rate-limit for /adminlogin (dev backdoor code).
+dev:
+  adminlogin:
+    rate:
+      window: ${DEV_ADMINLOGIN_RATE_WINDOW:PT10M}
+      max-attempts: ${DEV_ADMINLOGIN_RATE_MAX_ATTEMPTS:5}
+  console:
+    enabled: ${DEV_CONSOLE_ENABLED:false}
